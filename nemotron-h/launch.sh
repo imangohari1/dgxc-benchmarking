@@ -123,6 +123,9 @@ if { [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]] || [[ $GPU_TYPE ==
     export NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-4}
 fi
 
+# Added by Felix Abecassis (NVIDIA) on 2026-06-10
+#CONFIG_OVERRIDES+=" comm_overlap.tp_comm_overlap=false comm_overlap.tp_comm_overlap_cfg=null "
+
 # run command
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 
