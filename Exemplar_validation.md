@@ -89,19 +89,21 @@ Scale: **512 GPUs** | Repeats: **1** | Profiling: **disabled**
 | Llama 3.1   | 405B | FP8, NVFP4       |
 | Llama 3.1   | 70B  | FP8, NVFP4       |
 | Nemotron-H  | 56B  | FP8              |
+| Nemotron 3  | 120B | BF16             |
 | Qwen3       | 235B | BF16             |
 
 ### B300
 
-| Model       | Size | Dtypes     |
-| :---------- | :--- | :--------- |
-| DeepSeek-V3 | 671B | BF16       |
-| GPT (OSS)   | 120B | BF16       |
-| Llama 3.1   | 405B | FP8, NVFP4 |
-| Llama 3.1   | 70B  | FP8, NVFP4 |
-| Nemotron-H  | 56B  | FP8        |
-| Nemotron 3  | 120B | BF16       |
-| Qwen3       | 235B | BF16       |
+| Model       | Size | Dtypes           |
+| :---------- | :--- | :--------------- |
+| DeepSeek-V3 | 671B | BF16, FP8, NVFP4 |
+| GPT (OSS)   | 120B | BF16             |
+| Kimi-K2     | 1T   | FP8              |
+| Llama 3.1   | 405B | FP8, NVFP4       |
+| Llama 3.1   | 70B  | FP8, NVFP4       |
+| Nemotron-H  | 56B  | FP8              |
+| Nemotron 3  | 120B | BF16             |
+| Qwen3       | 235B | BF16             |
 
 ### B200
 
@@ -118,10 +120,9 @@ Scale: **512 GPUs** | Repeats: **1** | Profiling: **disabled**
 
 ### H100
 
-| Model       | Size | Dtypes    |
-| :---------- | :--- | :-------- |
-| DeepSeek-V3 | 671B | FP8       |
-| GPT (OSS)   | 120B | BF16      |
-| Llama 3.1   | 70B  | BF16, FP8 |
-| Nemotron-H  | 56B  | FP8       |
-| Qwen3       | 235B | BF16      |
+| Model      | Size | Dtypes    |
+| :--------- | :--- | :-------- |
+| GPT (OSS)  | 120B | BF16      |
+| Llama 3.1  | 70B  | BF16, FP8 |
+| Nemotron-H | 56B  | FP8       |
+| Qwen3      | 235B | BF16      |

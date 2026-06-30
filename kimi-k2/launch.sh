@@ -30,7 +30,7 @@ set -eu -o pipefail
 
 export WORKLOAD_TYPE=pretrain
 export MODEL_NAME=kimi-k2
-export FW_VERSION=26.04.00
+export FW_VERSION=26.04.01
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
@@ -57,7 +57,9 @@ GPU_METRICS_ENABLED=${ENABLE_GPU_METRICS:-false}
 GPU_METRICS_ENABLED=${GPU_METRICS_ENABLED,,}
 ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
-if [[ $GPU_TYPE == "b200" ]]; then
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
+if [[ $GPU_TYPE == "b200" ]] || [[ $GPU_TYPE == "b300" ]]; then
     TIME_LIMIT=${TIME_LIMIT:-"00:45:00"}
 else
     TIME_LIMIT=${TIME_LIMIT:-"00:20:00"}
@@ -117,12 +119,14 @@ if [[ $ENABLE_VBOOST == true ]]; then
     CONFIG_OVERRIDES+=" --enable_vboost true "
 fi
 
+CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
+
 if [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]]; then
     GPUS_PER_NODE=4
-elif [[ $GPU_TYPE == "b200" ]] || [[ $GPU_TYPE == "h100" ]]; then
+elif [[ $GPU_TYPE == "b300" ]] || [[ $GPU_TYPE == "b200" ]] || [[ $GPU_TYPE == "h100" ]]; then
     GPUS_PER_NODE=8
 else
-    echo "Error: GPU_TYPE must be gb300, gb200, b200, or h100 for Kimi-K2."
+    echo "Error: GPU_TYPE must be gb300, gb200, b300, b200, or h100 for Kimi-K2."
     exit 1
 fi
 

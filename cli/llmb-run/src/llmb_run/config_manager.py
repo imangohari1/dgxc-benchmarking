@@ -180,6 +180,11 @@ def _parse_schema_version(raw_config: Dict[str, Any]) -> int:
     return schema_version
 
 
+def _validate_required_string(value: Any, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Missing required '{field_name}' field in cluster configuration.")
+
+
 def _normalize_legacy_cluster_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
     flattened_keys_present = [key for key in sorted(_FLAT_CLUSTER_KEYS) if key in raw_config]
 
@@ -203,6 +208,7 @@ def _normalize_legacy_cluster_config(raw_config: Dict[str, Any]) -> Dict[str, An
         raise ValueError("Missing required 'launcher.llmb_install' field in cluster configuration.")
     if 'llmb_repo' not in launcher_config:
         raise ValueError("Missing required 'launcher.llmb_repo' field in cluster configuration.")
+    _validate_required_string(launcher_config['llmb_repo'], 'launcher.llmb_repo')
 
     normalized = dict(raw_config)
     normalized[_SCHEMA_VERSION_KEY] = _LEGACY_SCHEMA_VERSION
@@ -226,6 +232,7 @@ def _normalize_v2_cluster_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
     for key in _REQUIRED_CLUSTER_KEYS:
         if key not in raw_config:
             raise ValueError(f"Missing required '{key}' field in cluster configuration.")
+    _validate_required_string(raw_config['llmb_repo'], 'llmb_repo')
 
     normalized = dict(raw_config)
     normalized[_SCHEMA_VERSION_KEY] = _CURRENT_SCHEMA_VERSION

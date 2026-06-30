@@ -34,6 +34,13 @@ repositories:
     url: "https://github.com/NVIDIA/TensorRT-LLM.git"
     commit: "0c9430e5a530ba958fc9dca561a3ad865ad9f492"
 
+downloads:
+  huggingface:
+    repos:
+      - repo_id: openai/gpt-oss-120b
+        repo_type: model
+        name: gpt-oss-120b
+
 setup:
   venv_req: true
   dependencies:
@@ -43,17 +50,11 @@ setup:
         install_method:
           type: clone
     pip:
-      - 'huggingface_hub[cli]'
       - 'click==8.2.1'
       - 'transformers==4.52.4'
       - 'pillow==11.2.1'
       - 'datasets==3.6.0'
       - 'pydantic==2.11.7'
-  tasks:
-    - name: dataset_download
-      cmd: './download_dataset.sh'
-      job_type: local
-      requires_gpus: false
 
 # Run
 run:

@@ -29,8 +29,9 @@ import json
 import os
 import random
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple, TypeVar
 
 from llmb_install.utils.logging import get_logger
 
@@ -183,6 +184,54 @@ HF_IGNORE_PATTERNS = [
     "*.7z",
 ]
 
+HF_ASSET_TYPES = {"tokenizer", "config"}
+HF_REPO_TYPES = {"model", "dataset"}
+HF_REPO_TARGETS = {"workload", "shared"}
+
+_CACHE_ITEM_KEYS = {"repo_id", "revision", "assets"}
+_REPO_ITEM_KEYS = {"repo_id", "repo_type", "revision", "target", "name", "include", "exclude", "when"}
+
+
+@dataclass(frozen=True)
+class HuggingFaceAssetSpec:
+    """A shared-cache download: tokenizer/config files into $LLMB_INSTALL/.cache/huggingface."""
+
+    repo_id: str
+    revision: Optional[str] = None
+    assets: FrozenSet[str] = field(default_factory=frozenset)
+
+
+@dataclass(frozen=True)
+class HuggingFaceRepoSpec:
+    """A repo-contents download into an LLMB-managed workload or shared dataset directory."""
+
+    workload_key: str
+    repo_id: str
+    repo_type: str
+    revision: Optional[str] = None
+    target: str = "workload"
+    name: str = ""
+    include: Optional[Tuple[str, ...]] = None
+    exclude: Optional[Tuple[str, ...]] = None
+
+    def source_key(self) -> Tuple[Any, ...]:
+        return (
+            self.repo_id,
+            self.repo_type,
+            self.revision,
+            self.include,
+            self.exclude,
+        )
+
+
+@dataclass(frozen=True)
+class HuggingFaceDownloadPlan:
+    cache: Tuple[HuggingFaceAssetSpec, ...] = ()
+    repos: Tuple[HuggingFaceRepoSpec, ...] = ()
+
+    def empty(self) -> bool:
+        return not self.cache and not self.repos
+
 
 def _normalize_hf_token(token: str) -> Optional[str]:
     """Normalize a HuggingFace token for reliable HTTP auth.
@@ -201,6 +250,31 @@ def _normalize_hf_token(token: str) -> Optional[str]:
     return t or None
 
 
+# Conservative HuggingFace download parallelism. Peak download memory scales with total
+# concurrent Xet streams (max_workers x per-file concurrency), so we pin both low to stay
+# under tight per-job/per-user memory caps (`ulimit -v` or cgroup `memory.max`). Raise on
+# memory-rich hosts: LLMB_HF_MAX_WORKERS (files) and HF_XET_FIXED_DOWNLOAD_CONCURRENCY (streams).
+_DEFAULT_HF_MAX_WORKERS = 4
+
+
+def _hf_max_workers() -> int:
+    """Max number of concurrent download streams. Override with LLMB_HF_MAX_WORKERS."""
+    raw = os.environ.get("LLMB_HF_MAX_WORKERS")
+    if raw is None:
+        return _DEFAULT_HF_MAX_WORKERS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid LLMB_HF_MAX_WORKERS=%r (expected integer); using %d", raw, _DEFAULT_HF_MAX_WORKERS
+        )
+        return _DEFAULT_HF_MAX_WORKERS
+    if value < 1:
+        logger.warning("Ignoring LLMB_HF_MAX_WORKERS=%d (must be >= 1); using %d", value, _DEFAULT_HF_MAX_WORKERS)
+        return _DEFAULT_HF_MAX_WORKERS
+    return value
+
+
 def set_hf_environment(cache_dir: str) -> None:
     """Set HuggingFace environment variables.
 
@@ -212,15 +286,198 @@ def set_hf_environment(cache_dir: str) -> None:
     """
     os.environ["HF_HOME"] = cache_dir
     os.environ["HF_HUB_CACHE"] = os.path.join(cache_dir, "hub")
+    # Bound peak download memory (see _DEFAULT_HF_MAX_WORKERS); setdefault keeps user overrides.
+    os.environ.setdefault("HF_XET_FIXED_DOWNLOAD_CONCURRENCY", "1")
 
 
-def build_hf_requirements_plan(workloads: Dict[str, Dict[str, Any]], selected_keys: List[str]) -> Dict[str, Set[str]]:
-    """Build a per-repo HuggingFace requirements plan from workload metadata.
+def _hf_hub_cache_dir(cache_dir: str) -> str:
+    return os.path.join(cache_dir, "hub")
 
-    Returns:
-        Mapping of repo_id -> set of required assets (tokenizer/config)
+
+def _check_item_keys(item: Dict[str, Any], allowed: Set[str], where: str) -> None:
+    unknown = set(item) - allowed
+    if not unknown:
+        return
+    hint = ""
+    if allowed == _CACHE_ITEM_KEYS and unknown & (_REPO_ITEM_KEYS | {"snapshot"}):
+        hint = " Repo-contents downloads belong in 'downloads.huggingface.repos'."
+    raise ValueError(f"{where} entry has unsupported key(s) {sorted(unknown)}. Allowed keys: {sorted(allowed)}.{hint}")
+
+
+def _parse_repo_id(item: Dict[str, Any], where: str) -> str:
+    repo_id = item.get("repo_id")
+    if not isinstance(repo_id, str) or not repo_id:
+        raise ValueError(f"{where} entry has invalid 'repo_id': expected non-empty string.")
+    return repo_id
+
+
+def _parse_repo_type(item: Dict[str, Any], repo_id: str, where: str) -> str:
+    repo_type = item.get("repo_type")
+    if repo_type is None:
+        raise ValueError(
+            f"{where} entry for repo '{repo_id}' is missing required 'repo_type'. "
+            f"Allowed values are 'model' and 'dataset'."
+        )
+    if not isinstance(repo_type, str) or repo_type not in HF_REPO_TYPES:
+        raise ValueError(
+            f"{where} entry for repo '{repo_id}' has invalid 'repo_type' value '{repo_type}'. "
+            f"Allowed values are 'model' and 'dataset'."
+        )
+    return repo_type
+
+
+def _parse_revision(item: Dict[str, Any], where: str) -> Optional[str]:
+    revision = item.get("revision")
+    if revision is not None and not isinstance(revision, str):
+        raise ValueError(
+            f"{where} entry has invalid 'revision': expected string or null, got {type(revision).__name__}."
+        )
+    return revision
+
+
+def _parse_assets(item: Dict[str, Any], where: str) -> FrozenSet[str]:
+    assets = item.get("assets")
+    if assets is None:
+        return frozenset({"tokenizer", "config"})
+    if not isinstance(assets, list):
+        raise ValueError(f"{where} entry has invalid 'assets': expected list, got {type(assets).__name__}.")
+    if not assets:
+        raise ValueError(f"{where} entry has invalid 'assets': list must not be empty.")
+    asset_set = set()
+    for asset in assets:
+        if not isinstance(asset, str):
+            raise ValueError(f"{where} entry has invalid 'assets' entry: expected string, got {type(asset).__name__}.")
+        if asset not in HF_ASSET_TYPES:
+            raise ValueError(
+                f"{where} entry has invalid 'assets' value '{asset}'. Allowed values are 'tokenizer' and 'config'."
+            )
+        asset_set.add(asset)
+    return frozenset(asset_set)
+
+
+def _repo_basename(repo_id: str) -> str:
+    return repo_id.rstrip("/").split("/")[-1]
+
+
+def _parse_patterns(value: Any, field_name: str, where: str) -> Optional[Tuple[str, ...]]:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"{where} entry has invalid '{field_name}': expected list, got {type(value).__name__}.")
+    patterns = []
+    for pattern in value:
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError(f"{where} entry has invalid '{field_name}' entry: expected non-empty string.")
+        patterns.append(pattern)
+    return tuple(patterns)
+
+
+def _parse_when_gpu(item: Dict[str, Any], where: str) -> Optional[List[str]]:
+    when = item.get("when")
+    if when is None:
+        return None
+    if not isinstance(when, dict):
+        raise ValueError(f"{where} entry has invalid 'when': expected dict, got {type(when).__name__}.")
+    unknown = set(when) - {"gpu"}
+    if unknown:
+        raise ValueError(f"{where} entry has unsupported 'when' key(s) {sorted(unknown)}. Allowed keys: ['gpu'].")
+    when_gpu = when.get("gpu")
+    if when_gpu is None:
+        return None
+    if not isinstance(when_gpu, list) or not when_gpu:
+        raise ValueError(f"{where} entry has invalid 'when.gpu': expected non-empty list.")
+    if not all(isinstance(value, str) and value for value in when_gpu):
+        raise ValueError(f"{where} entry has invalid 'when.gpu' entry: expected non-empty string.")
+    return when_gpu
+
+
+def _parse_cache_item(item: Dict[str, Any], where: str) -> Tuple[str, Optional[str], FrozenSet[str]]:
+    if not isinstance(item, dict):
+        raise ValueError(f"{where} entry is invalid: expected dict, got {type(item).__name__}.")
+    _check_item_keys(item, _CACHE_ITEM_KEYS, where)
+    repo_id = _parse_repo_id(item, where)
+    revision = _parse_revision(item, where)
+    return repo_id, revision, _parse_assets(item, where)
+
+
+def _parse_repo_item(
+    item: Dict[str, Any], workload_key: str, where: str
+) -> Tuple[HuggingFaceRepoSpec, Optional[List[str]]]:
+    """Parse a repo-contents download entry.
+
+    The entry is fully validated before the 'when' filter is evaluated by the
+    caller, so a malformed entry fails on every GPU type, not just matching ones.
     """
-    requirements: Dict[str, Set[str]] = {}
+    if not isinstance(item, dict):
+        raise ValueError(f"{where} entry is invalid: expected dict, got {type(item).__name__}.")
+    _check_item_keys(item, _REPO_ITEM_KEYS, where)
+    repo_id = _parse_repo_id(item, where)
+    repo_type = _parse_repo_type(item, repo_id, where)
+    revision = _parse_revision(item, where)
+
+    target = item.get("target", "workload")
+    if target is None:
+        target = "workload"
+    if not isinstance(target, str) or target not in HF_REPO_TARGETS:
+        raise ValueError(
+            f"{where} entry for repo '{repo_id}' has invalid 'target' value '{target}'. "
+            f"Allowed values are 'workload' and 'shared'."
+        )
+
+    name = item.get("name", _repo_basename(repo_id))
+    if name is None:
+        name = _repo_basename(repo_id)
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"{where} entry for repo '{repo_id}' has invalid 'name': expected non-empty string.")
+
+    spec = HuggingFaceRepoSpec(
+        workload_key=workload_key,
+        repo_id=repo_id,
+        repo_type=repo_type,
+        revision=revision,
+        target=target,
+        name=name,
+        include=_parse_patterns(item.get("include"), "include", where),
+        exclude=_parse_patterns(item.get("exclude"), "exclude", where),
+    )
+    return spec, _parse_when_gpu(item, where)
+
+
+def _split_huggingface_section(section: Any, where: str) -> Tuple[List[Any], List[Any]]:
+    """Split downloads.huggingface into (cache_items, repo_items).
+
+    The bare list form is the released shorthand for cache entries; the map form
+    holds explicit 'cache' and 'repos' lists.
+    """
+    if isinstance(section, list):
+        return section, []
+    if isinstance(section, dict):
+        unknown = set(section) - {"cache", "repos"}
+        if unknown:
+            raise ValueError(f"{where} has unsupported key(s) {sorted(unknown)}. Allowed keys: ['cache', 'repos'].")
+        cache_items = section.get("cache") or []
+        repo_items = section.get("repos") or []
+        if not isinstance(cache_items, list):
+            raise ValueError(f"{where}.cache is invalid: expected list, got {type(cache_items).__name__}.")
+        if not isinstance(repo_items, list):
+            raise ValueError(f"{where}.repos is invalid: expected list, got {type(repo_items).__name__}.")
+        return cache_items, repo_items
+    raise ValueError(
+        f"{where} is invalid: expected list or dict, got {type(section).__name__}. "
+        f"Check metadata.yaml - should be:\n"
+        f"downloads:\n"
+        f"  huggingface:\n"
+        f"    - repo_id: 'model/name'\n"
+        f"      assets: [tokenizer, config]"
+    )
+
+
+def build_hf_download_plan(
+    workloads: Dict[str, Dict[str, Any]], selected_keys: List[str], gpu_type: Optional[str] = None
+) -> HuggingFaceDownloadPlan:
+    """Build a normalized HuggingFace download plan from workload metadata."""
+    asset_requirements: Dict[Tuple[str, Optional[str]], Set[str]] = {}
+    repo_specs: Dict[HuggingFaceRepoSpec, None] = {}
 
     logger.debug(f"Checking {len(selected_keys)} workloads for HF downloads: {selected_keys}")
 
@@ -263,67 +520,64 @@ def build_hf_requirements_plan(workloads: Dict[str, Dict[str, Any]], selected_ke
                         f"Workload '{key}' has invalid 'downloads.hf_tokenizers' entry: expected string, "
                         f"got {type(repo_id).__name__}."
                     )
-                requirements.setdefault(repo_id, set()).add("tokenizer")
+                asset_requirements.setdefault((repo_id, None), set()).add("tokenizer")
 
         if has_new:
-            huggingface = downloads.get("huggingface", [])
-            logger.debug(f"Workload '{key}': downloads.huggingface = {huggingface}")
-            if not isinstance(huggingface, list):
-                raise ValueError(
-                    f"Workload '{key}' has invalid 'downloads.huggingface': expected list, got {type(huggingface).__name__}. "
-                    f"Check metadata.yaml - should be:\n"
-                    f"downloads:\n"
-                    f"  huggingface:\n"
-                    f"    - repo_id: 'model/name'\n"
-                    f"      assets: [tokenizer, config]"
-                )
-            for item in huggingface:
-                if not isinstance(item, dict):
-                    raise ValueError(
-                        f"Workload '{key}' has invalid 'downloads.huggingface' entry: expected dict, "
-                        f"got {type(item).__name__}."
+            section = downloads.get("huggingface")
+            logger.debug(f"Workload '{key}': downloads.huggingface = {section}")
+            where = f"Workload '{key}' 'downloads.huggingface'"
+            cache_items, repo_items = _split_huggingface_section(section, where)
+            cache_where = where if isinstance(section, list) else f"{where}.cache"
+
+            for item in cache_items:
+                repo_id, revision, assets = _parse_cache_item(item, cache_where)
+                asset_requirements.setdefault((repo_id, revision), set()).update(assets)
+
+            for item in repo_items:
+                spec, when_gpu = _parse_repo_item(item, key, f"{where}.repos")
+                if when_gpu is not None and gpu_type is not None and gpu_type not in when_gpu:
+                    logger.debug(
+                        "Skipping HuggingFace repo download for workload '%s' repo '%s' on GPU '%s' (allowed: %s)",
+                        key,
+                        spec.repo_id,
+                        gpu_type,
+                        when_gpu,
                     )
-                repo_id = item.get("repo_id")
-                if not isinstance(repo_id, str) or not repo_id:
-                    raise ValueError(
-                        f"Workload '{key}' has invalid 'downloads.huggingface.repo_id': expected non-empty string."
-                    )
-                assets = item.get("assets")
-                if assets is None:
-                    asset_set = {"tokenizer", "config"}
-                else:
-                    if not isinstance(assets, list):
-                        raise ValueError(
-                            f"Workload '{key}' has invalid 'downloads.huggingface.assets': expected list, "
-                            f"got {type(assets).__name__}."
-                        )
-                    if not assets:
-                        raise ValueError(
-                            f"Workload '{key}' has invalid 'downloads.huggingface.assets': list must not be empty."
-                        )
-                    asset_set = set()
-                    for asset in assets:
-                        if not isinstance(asset, str):
-                            raise ValueError(
-                                f"Workload '{key}' has invalid 'downloads.huggingface.assets' entry: expected string, "
-                                f"got {type(asset).__name__}."
-                            )
-                        if asset not in {"tokenizer", "config"}:
-                            raise ValueError(
-                                f"Workload '{key}' has invalid 'downloads.huggingface.assets' value '{asset}'. "
-                                f"Allowed values are 'tokenizer' and 'config'."
-                            )
-                        asset_set.add(asset)
-                requirements.setdefault(repo_id, set()).update(asset_set)
+                    continue
+                repo_specs.setdefault(spec)
 
-    logger.debug(f"Total unique HF repos found: {len(requirements)}")
-    return requirements
+    # Normalize optional fields (revision/include/exclude may be None) before sorting:
+    # mixing None and str/tuple in a sort key raises TypeError. This happens whenever two
+    # entries share a repo_id with inconsistent revision pinning or include/exclude patterns.
+    cache = tuple(
+        HuggingFaceAssetSpec(repo_id=repo_id, revision=revision, assets=frozenset(assets))
+        for (repo_id, revision), assets in sorted(asset_requirements.items(), key=lambda kv: (kv[0][0], kv[0][1] or ""))
+    )
+    repos = tuple(
+        sorted(
+            repo_specs,
+            key=lambda spec: (
+                spec.workload_key,
+                spec.repo_id,
+                spec.repo_type,
+                spec.revision or "",
+                spec.target,
+                spec.name,
+                spec.include or (),
+                spec.exclude or (),
+            ),
+        )
+    )
+
+    logger.debug("Total unique HF cache asset specs found: %d", len(cache))
+    logger.debug("Total unique HF repo download specs found: %d", len(repos))
+    return HuggingFaceDownloadPlan(cache=cache, repos=repos)
 
 
-def download_huggingface_snapshots(
-    requirements: Dict[str, Set[str]], cache_dir: str, token: Optional[str] = None
-) -> List[str]:
-    """Download HuggingFace repos deterministically (non-weight files only).
+def download_huggingface_cache_assets(
+    asset_specs: Tuple[HuggingFaceAssetSpec, ...], cache_dir: str, token: Optional[str] = None
+) -> List[HuggingFaceAssetSpec]:
+    """Download HuggingFace asset repos deterministically (non-weight files only).
 
     Uses snapshot_download with fixed allow/ignore patterns. No verification is
     performed in this phase.
@@ -332,7 +586,7 @@ def download_huggingface_snapshots(
     intentional - snapshot_download is idempotent, so retrying skips completed
     downloads and resumes faster (especially useful when rate-limited).
     """
-    if not requirements:
+    if not asset_specs:
         logger.debug("No HuggingFace repos required for download phase")
         return []
 
@@ -358,31 +612,36 @@ def download_huggingface_snapshots(
     # Import HF libs only after HF_HOME/HF_HUB_CACHE/HF_TOKEN are set.
     from huggingface_hub import snapshot_download
 
-    repos = sorted(requirements.keys())
+    specs = tuple(sorted(asset_specs, key=lambda item: (item.repo_id, item.revision or "")))
 
     print("\nDownloading HuggingFace files")
     print("--------------------------------")
     print("\nRequired HuggingFace repos:")
-    for repo_id in repos:
-        assets = ", ".join(sorted(requirements[repo_id]))
+    for spec in specs:
+        assets = ", ".join(sorted(spec.assets))
         suffix = f" ({assets})" if assets else ""
-        print(f"  - {repo_id}{suffix}")
+        revision = f" @ {spec.revision}" if spec.revision else ""
+        print(f"  - {spec.repo_id}{revision}{suffix}")
 
     print("\nDownloading non-weight files...")
     print("(Progress bars are expected)")
 
     successful = []
-    total = len(repos)
-    for idx, repo_id in enumerate(repos, 1):
+    total = len(specs)
+    for idx, spec in enumerate(specs, 1):
+        repo_id = spec.repo_id
         logger.debug(f"Snapshotting HuggingFace repo {idx}/{total}: {repo_id}")
         print(f"\n[{idx}/{total}] {repo_id}")
         try:
             snapshot_path = _with_retry(
-                lambda rid=repo_id, tok=normalized_token: snapshot_download(
-                    repo_id=rid,
+                lambda hf_spec=spec, tok=normalized_token: snapshot_download(
+                    repo_id=hf_spec.repo_id,
+                    revision=hf_spec.revision,
                     allow_patterns=HF_ALLOW_PATTERNS,
                     ignore_patterns=HF_IGNORE_PATTERNS,
+                    cache_dir=_hf_hub_cache_dir(cache_dir),
                     token=tok,
+                    max_workers=_hf_max_workers(),
                 ),
                 operation=f"snapshot '{repo_id}'",
             )
@@ -393,28 +652,160 @@ def download_huggingface_snapshots(
             raise RuntimeError(f"HuggingFace snapshot failed for '{repo_id}'. Error chain: {chain}") from exc
         _maybe_inject_nemotron_config(
             repo_id=repo_id,
-            assets=requirements[repo_id],
+            assets=set(spec.assets),
             snapshot_path=snapshot_path,
         )
         # Tokenizer finalization may download additional files (e.g., custom code)
         # and can hit rate limits independently of snapshot_download.
         _with_retry(
-            lambda rid=repo_id, tok=normalized_token, path=snapshot_path: _maybe_finalize_tokenizer_snapshot(
-                repo_id=rid,
-                assets=requirements[rid],
+            lambda hf_spec=spec, tok=normalized_token, path=snapshot_path: _maybe_finalize_tokenizer_snapshot(
+                repo_id=hf_spec.repo_id,
+                assets=set(hf_spec.assets),
                 snapshot_path=path,
                 token=tok,
             ),
             operation=f"tokenizer finalization '{repo_id}'",
         )
-        successful.append(repo_id)
+        successful.append(spec)
 
     print(f"\nSuccessfully downloaded {len(successful)} repo(s).")
     print("Download phase complete.")
     return successful
 
 
-def _verify_hf_asset(repo_id: str, asset: str, load_fn: Any) -> None:
+def resolve_huggingface_repo_local_dir(spec: HuggingFaceRepoSpec, install_path: str) -> str:
+    """Resolve a repo download destination under LLMB-managed paths."""
+    if spec.target == "workload":
+        base = Path(install_path) / "workloads" / spec.workload_key
+    elif spec.target == "shared":
+        base = Path(install_path) / "datasets"
+    else:
+        raise ValueError(
+            f"Invalid HuggingFace repo download target '{spec.target}'. Allowed values are 'workload' and 'shared'."
+        )
+
+    base_resolved = base.resolve()
+    destination = (base / spec.name).resolve()
+    if destination == base_resolved:
+        raise ValueError(
+            f"Invalid HuggingFace repo download name '{spec.name}' for workload '{spec.workload_key}': "
+            f"destination must be a subdirectory of {base_resolved}, not the directory itself."
+        )
+    try:
+        destination.relative_to(base_resolved)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid HuggingFace repo download name '{spec.name}' for workload '{spec.workload_key}': "
+            f"destination must stay under {base_resolved}."
+        ) from exc
+    return str(destination)
+
+
+def _dedup_and_validate_repo_destinations(
+    repo_specs: Tuple[HuggingFaceRepoSpec, ...], install_path: str
+) -> Tuple[HuggingFaceRepoSpec, ...]:
+    """Collapse specs resolving to the same destination; reject conflicting sources."""
+    by_destination: Dict[str, HuggingFaceRepoSpec] = {}
+    for spec in repo_specs:
+        destination = resolve_huggingface_repo_local_dir(spec, install_path)
+        existing = by_destination.get(destination)
+        if existing is None:
+            by_destination[destination] = spec
+        elif existing.source_key() != spec.source_key():
+            raise ValueError(
+                "Conflicting HuggingFace repo downloads resolve to the same destination: "
+                f"{destination}. Existing source is {existing.repo_id}; conflicting source is {spec.repo_id}."
+            )
+    return tuple(by_destination[destination] for destination in sorted(by_destination))
+
+
+def _repo_download_kwargs(
+    spec: HuggingFaceRepoSpec, local_dir: str, cache_dir: str, token: Optional[str]
+) -> Dict[str, Any]:
+    # Both HF_HUB_CACHE (via set_hf_environment) and cache_dir pin the cache into the
+    # install dir. The env var is the real guard against the ~/.cache fallback; cache_dir
+    # is explicit redundancy - important on HPC where /home is size-restricted.
+    kwargs: Dict[str, Any] = {
+        "repo_id": spec.repo_id,
+        "repo_type": spec.repo_type,
+        "revision": spec.revision,
+        "local_dir": local_dir,
+        "cache_dir": _hf_hub_cache_dir(cache_dir),
+        "token": token,
+        "max_workers": _hf_max_workers(),
+    }
+    if spec.include is not None:
+        kwargs["allow_patterns"] = list(spec.include)
+    if spec.exclude is not None:
+        kwargs["ignore_patterns"] = list(spec.exclude)
+    return kwargs
+
+
+def download_huggingface_repos(
+    repo_specs: Tuple[HuggingFaceRepoSpec, ...],
+    install_path: str,
+    cache_dir: str,
+    token: Optional[str] = None,
+) -> List[str]:
+    """Download HuggingFace repo contents into LLMB-managed directories."""
+    if not repo_specs:
+        logger.debug("No HuggingFace repo downloads required")
+        return []
+
+    repo_specs = _dedup_and_validate_repo_destinations(repo_specs, install_path)
+    os.makedirs(cache_dir, exist_ok=True)
+    set_hf_environment(cache_dir)
+
+    normalized_token = _normalize_hf_token(token) if token else None
+    if token and not normalized_token:
+        logger.warning("HF token provided but empty after normalization - treating as no token")
+    if normalized_token:
+        os.environ["HF_TOKEN"] = normalized_token
+        logger.debug(f"Authenticating with HuggingFace (token: {_obfuscate_token(normalized_token)})")
+    else:
+        logger.debug("No HF token provided - downloads may be rate limited and gated repos will fail")
+
+    from huggingface_hub import snapshot_download
+
+    specs = tuple(sorted(repo_specs, key=lambda item: (item.target, item.workload_key, item.name, item.repo_id)))
+
+    print("\nDownloading HuggingFace repos")
+    print("--------------------------------")
+    print("\nRequired HuggingFace repos:")
+    for spec in specs:
+        local_dir = resolve_huggingface_repo_local_dir(spec, install_path)
+        revision = f" @ {spec.revision}" if spec.revision else ""
+        repo_type = f" [{spec.repo_type}]" if spec.repo_type != "model" else ""
+        print(f"  - {spec.repo_id}{revision}{repo_type} -> {local_dir}")
+
+    print("\nDownloading repo contents...")
+    print("(Progress bars are expected)")
+
+    successful = []
+    total = len(specs)
+    for idx, spec in enumerate(specs, 1):
+        local_dir = resolve_huggingface_repo_local_dir(spec, install_path)
+        os.makedirs(os.path.dirname(local_dir), exist_ok=True)
+        logger.debug("Downloading HuggingFace repo %d/%d: %s -> %s", idx, total, spec.repo_id, local_dir)
+        print(f"\n[{idx}/{total}] {spec.repo_id} -> {local_dir}")
+        try:
+            _with_retry(
+                lambda hf_spec=spec, dest=local_dir, tok=normalized_token: snapshot_download(
+                    **_repo_download_kwargs(hf_spec, dest, cache_dir, tok)
+                ),
+                operation=f"repo download '{spec.repo_id}'",
+            )
+        except Exception as exc:
+            chain = _format_exception_chain(exc)
+            logger.error("HuggingFace repo download failed for '%s': %s", spec.repo_id, chain)
+            raise RuntimeError(f"HuggingFace repo download failed for '{spec.repo_id}'. Error chain: {chain}") from exc
+        successful.append(local_dir)
+
+    print(f"\nSuccessfully downloaded {len(successful)} repo(s).")
+    return successful
+
+
+def _verify_hf_asset(repo_id: str, asset: str, load_fn: Any, revision: Optional[str] = None) -> None:
     """Verify a HuggingFace asset loads locally.
 
     Uses trust_remote_code=True to match runtime behavior. This is safe because:
@@ -423,11 +814,13 @@ def _verify_hf_asset(repo_id: str, asset: str, load_fn: Any) -> None:
     3. Models like DeepSeek V3 and Qwen3 require custom Python modules
     """
     try:
-        load_fn(
-            repo_id,
-            local_files_only=True,
-            trust_remote_code=True,
-        )
+        kwargs = {
+            "local_files_only": True,
+            "trust_remote_code": True,
+        }
+        if revision is not None:
+            kwargs["revision"] = revision
+        load_fn(repo_id, **kwargs)
     except Exception as exc:
         logger.debug(
             "Offline verification failed for repo '%s' (asset: %s): %s",
@@ -466,7 +859,7 @@ def _maybe_inject_nemotron_config(repo_id: str, assets: Set[str], snapshot_path:
 def _maybe_finalize_tokenizer_snapshot(
     repo_id: str, assets: Set[str], snapshot_path: str, token: Optional[str]
 ) -> None:
-    """Materialize tokenizer metadata files for repos that don't ship them."""
+    """Write tokenizer metadata files for repos that don't ship them."""
     if "tokenizer" not in assets:
         return
 
@@ -514,9 +907,9 @@ def _maybe_finalize_tokenizer_snapshot(
     print("  → Generated tokenizer metadata files")
 
 
-def verify_huggingface_assets(requirements: Dict[str, Set[str]], cache_dir: str) -> None:
-    """Verify required HuggingFace assets load offline using local cache only."""
-    if not requirements:
+def verify_huggingface_cache_assets(asset_specs: Tuple[HuggingFaceAssetSpec, ...], cache_dir: str) -> None:
+    """Verify required HuggingFace asset specs load offline using local cache only."""
+    if not asset_specs:
         logger.debug("No HuggingFace repos required for verification phase")
         return
 
@@ -526,46 +919,53 @@ def verify_huggingface_assets(requirements: Dict[str, Set[str]], cache_dir: str)
     # Import HF libs only after HF_HOME/HF_HUB_CACHE are set.
     from transformers import AutoConfig, AutoTokenizer
 
-    repos = sorted(requirements.keys())
+    specs = tuple(sorted(asset_specs, key=lambda item: (item.repo_id, item.revision or "")))
 
     print("\nVerifying HuggingFace assets (offline)")
     print("-------------------------------------")
-    for idx, repo_id in enumerate(repos, 1):
-        assets = requirements[repo_id]
+    for idx, spec in enumerate(specs, 1):
+        repo_id = spec.repo_id
+        assets = spec.assets
         asset_list = ", ".join(sorted(assets))
         suffix = f" ({asset_list})" if asset_list else ""
-        print(f"\n[{idx}/{len(repos)}] {repo_id}{suffix}")
+        revision = f" @ {spec.revision}" if spec.revision else ""
+        print(f"\n[{idx}/{len(specs)}] {repo_id}{revision}{suffix}")
 
         if "tokenizer" in assets:
-            _verify_hf_asset(repo_id, "tokenizer", AutoTokenizer.from_pretrained)
+            _verify_hf_asset(repo_id, "tokenizer", AutoTokenizer.from_pretrained, revision=spec.revision)
             print("  ✓ tokenizer")
 
         if "config" in assets:
-            _verify_hf_asset(repo_id, "config", AutoConfig.from_pretrained)
+            _verify_hf_asset(repo_id, "config", AutoConfig.from_pretrained, revision=spec.revision)
             print("  ✓ config")
 
-    print(f"\nSuccessfully verified {len(repos)} repo(s).")
+    print(f"\nSuccessfully verified {len(specs)} repo(s).")
 
 
 def download_huggingface_files_for_workloads(
-    workloads: Dict[str, Dict[str, Any]], selected_keys: List[str], install_path: str, hf_token: Optional[str] = None
+    workloads: Dict[str, Dict[str, Any]],
+    selected_keys: List[str],
+    install_path: str,
+    hf_token: Optional[str] = None,
+    gpu_type: Optional[str] = None,
 ) -> None:
-    """Download and verify HuggingFace assets required by selected workloads.
+    """Download HuggingFace cache assets and repo contents required by selected workloads.
 
-    This entrypoint builds a requirements plan, runs the download phase, then
-    verifies assets offline. It supports legacy downloads.hf_tokenizers and the
-    new downloads.huggingface schema.
+    Cache asset downloads are verified offline. Repo downloads are written into
+    LLMB-managed workload or shared dataset directories; a clean HuggingFace
+    download exit is the verification for those entries.
     """
-    requirements = build_hf_requirements_plan(workloads, selected_keys)
-    if not requirements:
-        logger.debug("No HuggingFace assets required")
+    plan = build_hf_download_plan(workloads, selected_keys, gpu_type=gpu_type)
+    if plan.empty():
+        logger.debug("No HuggingFace downloads required")
         return
 
     hf_cache_dir = os.path.join(install_path, ".cache", "huggingface")
     os.makedirs(hf_cache_dir, exist_ok=True)
 
-    download_huggingface_snapshots(requirements, hf_cache_dir, hf_token)
-    verify_huggingface_assets(requirements, hf_cache_dir)
+    download_huggingface_cache_assets(plan.cache, hf_cache_dir, hf_token)
+    verify_huggingface_cache_assets(plan.cache, hf_cache_dir)
+    download_huggingface_repos(plan.repos, install_path, hf_cache_dir, hf_token)
 
 
 def _obfuscate_token(token: str) -> str:

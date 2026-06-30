@@ -30,7 +30,7 @@ set -eu -o pipefail
 
 export WORKLOAD_TYPE=pretrain
 export MODEL_NAME=nemotron_3
-export FW_VERSION=26.04.00
+export FW_VERSION=26.04.01
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
@@ -69,6 +69,8 @@ GPU_METRICS_ENABLED=${ENABLE_GPU_METRICS:-false}
 GPU_METRICS_ENABLED=${GPU_METRICS_ENABLED,,}
 ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
 TIME_LIMIT=${TIME_LIMIT:-"00:45:00"}
 MAX_STEPS=${MAX_STEPS:-50}
 
@@ -125,6 +127,8 @@ fi
 if [[ $ENABLE_VBOOST == true ]]; then
     CONFIG_OVERRIDES+=" --enable_vboost true "
 fi
+
+CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
 
 if [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]]; then
     GPUS_PER_NODE=4

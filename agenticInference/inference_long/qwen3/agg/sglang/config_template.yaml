@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# srt-slurm recipe template for the agentic qwen3 long-context benchmark.
+# launch.sh renders one config per concurrency with envsubst
+# and runs each with `srtctl apply -f`
+#
+# model.path / model.container are srtslurm.yaml aliases registered during
+# install
+
+name: "agentic_qwen3_long_test"
+
+slurm:
+  time_limit: "01:00:00"
+
+model:
+  path: "qwen3-32b"
+  container: "lmsysorg/sglang:v0.5.11"
+  precision: "bf16"
+
+resources:
+  gpu_type: "gb200"
+  gpus_per_node: 4
+  agg_nodes: 1
+  agg_workers: 1
+  gpus_per_agg: 4
+
+container_mounts:
+  "${DATASET_DIR}": "/dataset"
+
+frontend:
+  type: sglang
+
+backend:
+
+  aggregated_environment:
+    PYTHONUNBUFFERED: "1"
+    SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN: "1"
+
+  sglang_config:
+    aggregated:
+      served-model-name: "Qwen/Qwen3-32B"
+      trust-remote-code: true
+      tensor-parallel-size: 4
+      context-length: 131072
+      json-model-override-args: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}}'
+      mem-fraction-static: 0.30
+      tokenizer-worker-num: 6
+      enable-hierarchical-cache: true
+      hicache-ratio: 2.0
+      hicache-write-policy: "write_through_selective"
+      hicache-io-backend: "kernel"
+      enable-metrics: true
+      enable-cache-report: true
+
+benchmark:
+  type: "custom"
+  command: |
+    set -euo pipefail
+
+    uvx --from 'git+https://github.com/ai-dynamo/aiperf.git@fef78a96' \
+    aiperf profile \
+    --scenario inferencex-agentx-mvp \
+    --url "http://localhost:8000" \
+    --model "Qwen/Qwen3-32B" \
+    --endpoint-type chat \
+    --streaming \
+    --custom-dataset-type "weka_trace" \
+    --input-file "/dataset" \
+    --num-dataset-entries 267 \
+    --concurrency $SESSION_CONCURRENCY \
+    --benchmark-duration 900 \
+    --num-profile-runs 3 \
+    --unsafe-override \
+    --cache-bust first_turn_prefix \
+    --ui simple \
+    --artifact-dir /logs/aiperf

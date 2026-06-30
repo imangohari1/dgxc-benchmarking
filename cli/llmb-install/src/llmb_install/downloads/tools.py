@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,8 +32,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
@@ -44,6 +42,7 @@ from llmb_install.constants import (
     NSYS_FILENAME_PATTERNS,
     SUPPORTED_TOOLS,
 )
+from llmb_install.utils.download import download_file
 from llmb_install.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -208,7 +207,7 @@ def _install_nsys(
         # Download to temp file first, then move to final location on success
         temp_download = cached_installer + '.tmp'
         try:
-            _download_file(download_url, temp_download)
+            download_file(download_url, temp_download)
             os.rename(temp_download, cached_installer)
             os.chmod(cached_installer, 0o755)
             logger.debug("Download complete")
@@ -313,7 +312,7 @@ def _install_cuda_cupti_lib(
         logger.debug(f"Downloading to cache: {cached_archive}")
         temp_download = cached_archive + '.tmp'
         try:
-            _download_file(download_url, temp_download)
+            download_file(download_url, temp_download)
             os.rename(temp_download, cached_archive)
             logger.debug("Download complete")
         finally:
@@ -346,30 +345,3 @@ def _install_cuda_cupti_lib(
     except Exception as e:
         logger.error(f"Failed to extract cuda_cupti_lib archive: {e}")
         raise
-
-
-def _download_file(url: str, dest_path: str) -> None:
-    """Download a file from URL to destination path with progress indication.
-
-    Args:
-        url: URL to download from
-        dest_path: Local path to save file to
-    """
-    try:
-
-        def _progress_hook(block_num, block_size, total_size):
-            """Simple progress indicator."""
-            if total_size > 0:
-                percent = min(100, (block_num * block_size * 100) // total_size)
-                if block_num % 50 == 0:  # Update every 50 blocks to avoid spam
-                    print(f"  Progress: {percent}%", end='\r', flush=True)
-
-        urllib.request.urlretrieve(url, dest_path, reporthook=_progress_hook)
-        print("  Progress: 100%")  # Final progress update
-
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Failed to download from {url}: HTTP {e.code} - {e.reason}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Failed to download from {url}: {e.reason}") from e
-    except Exception as e:
-        raise RuntimeError(f"Failed to download from {url}: {str(e)}") from e

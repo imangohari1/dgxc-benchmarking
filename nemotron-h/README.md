@@ -2,7 +2,19 @@
 
 This recipe contains information and scripts to produce performance results for the Nemotron-H pre-training workloads. The scripts help perform environment setup and launch benchmark jobs. Configurations use weak scaling methodology (global batch size scales proportionally with GPU count).
 
-## GB300, GB200 and B300
+## GB300 and B300
+
+| Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
+| --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
+| FP8       |  8   |  8192  |  118   |  2  |  1  |  1  |  1  |  4  |     |  1  |  24  |  6  |
+| FP8       |  16  |  8192  |  118   |  2  |  1  |  1  |  1  |  8  |     |  1  |  48  |  6  |
+| FP8       |  32  |  8192  |  118   |  2  |  1  |  1  |  1  | 16  |     |  1  |  96  |  6  |
+| FP8       |  64  |  8192  |  118   |  2  |  1  |  1  |  1  | 32  |     |  1  | 192  |  6  |
+| FP8       | 128  |  8192  |  118   |  2  |  1  |  1  |  1  | 64  |     |  1  | 384  |  6  |
+| FP8       | 256  |  8192  |  118   |  2  |  1  |  1  |  1  | 128 |     |  1  | 768  |  6  |
+| FP8       | 512  |  8192  |  118   |  2  |  1  |  1  |  1  | 256 |     |  1  | 1536 |  6  |
+
+## GB200
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
@@ -31,7 +43,6 @@ This recipe contains information and scripts to produce performance results for 
 | FP8       | 128  |  8192  |  118   |  8  |  1  |  1  |  1  | 16  | N/A |  1  | 384  | 24  |
 | FP8       | 256  |  8192  |  118   |  8  |  1  |  1  |  1  | 32  | N/A |  1  | 768  | 24  |
 | FP8       | 512  |  8192  |  118   |  8  |  1  |  1  |  1  | 64  | N/A |  1  | 1536 | 24  |
-| FP8       | 1024 |  8192  |  118   |  8  |  1  |  1  |  1  | 128 | N/A |  1  | 3072 | 24  |
 
 # Performance Measurement and Analysis
 
@@ -140,7 +151,7 @@ cd $LLMB_INSTALL
 llmb-run submit -w pretrain_nemotron-h --dtype fp8 --scale 128
 
 # Example with different scale
-llmb-run submit -w pretrain_nemotron-h --dtype fp8 --scale 1024
+llmb-run submit -w pretrain_nemotron-h --dtype fp8 --scale 256
 ```
 
 ### Additional SLURM Parameters

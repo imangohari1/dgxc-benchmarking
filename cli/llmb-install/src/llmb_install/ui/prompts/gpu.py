@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -24,7 +24,7 @@
 
 from typing import Any, Dict, Optional
 
-from llmb_install.cluster import gpu
+from llmb_install.cluster import gpu, slurm
 from llmb_install.ui.interface import UIInterface
 
 
@@ -73,7 +73,11 @@ def prompt_gpu_type(
 
 
 def prompt_node_architecture(
-    ui: UIInterface, gpu_type: str, default: Optional[str] = None, express_mode: bool = False
+    ui: UIInterface,
+    gpu_type: str,
+    default: Optional[str] = None,
+    express_mode: bool = False,
+    gpu_partition: Optional[str] = None,
 ) -> str:
     """Prompt the user for the node CPU architecture, with auto-selection based on GPU type.
 
@@ -82,6 +86,7 @@ def prompt_node_architecture(
         gpu_type: The selected GPU type (h100, gb200, b200)
         default: Default architecture from system config (if available)
         express_mode: Whether this is being called from express mode (shows default messages)
+        gpu_partition: SLURM GPU partition to sample for architecture detection
 
     Returns:
         str: The selected node CPU architecture ('x86_64' or 'aarch64')
@@ -94,6 +99,26 @@ def prompt_node_architecture(
         arch_name = "ARM-based" if arch == 'aarch64' else "x86-based"
         ui.log(f"{gpu_type.upper()} systems are {arch_name} ({arch}). Auto-selecting {arch} architecture.")
         return arch
+
+    if gpu_partition:
+        detection = slurm.detect_partition_architecture(gpu_partition)
+        detected_arch = detection.get("architecture")
+        if detected_arch:
+            ui.log(f"✓ Auto-detected GPU node architecture: {detected_arch}")
+            return detected_arch
+
+        reason = detection.get("reason")
+        architectures = detection.get("architectures", {})
+        if reason == "mixed" and architectures:
+            values = sorted(set(architectures.values()))
+            ui.log(f"SLURM reported mixed node architectures: {', '.join(values)}.")
+        elif reason == "unsupported" and architectures:
+            values = sorted(set(architectures.values()))
+            ui.log(f"SLURM reported unsupported node architecture: {', '.join(values)}.")
+        elif reason in {"no_nodes", "no_arch"}:
+            ui.log("Could not auto-detect node architecture from SLURM.")
+        elif reason == "error":
+            ui.log("Could not auto-detect node architecture from SLURM.")
 
     ui.log("Please select the CPU architecture of your GPU nodes to ensure correct container image downloads.")
     ui.log("Choosing the wrong architecture (e.g., aarch64 for an x86_64 system) will result in 'Exec format error'.")

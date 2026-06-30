@@ -445,7 +445,10 @@ When you launch a job using `llmb-run`, a `llmb-config_<JOBID>.yaml` file is aut
 ### Config File Location
 
 - **Nemo2 launcher**: The config file is created in the experiment's working directory (returned by the launcher)
-- **Sbatch launcher**: The config file is created in the current working directory
+- **Configured sbatch launcher**: The config file is created in the managed experiment directory under `$LLMB_INSTALL/workloads/<workload>/experiments/`
+- **Legacy sbatch launcher**: The config file is created in the current working directory
+
+For managed `configured_sbatch` workloads, `llmb-run` passes the experiment directory to the job as `LLMB_EXPERIMENT_DIR`. `llmb-run jobs log` and `llmb-run archive` use that directory for logs and artifacts.
 
 ### Config File Structure
 

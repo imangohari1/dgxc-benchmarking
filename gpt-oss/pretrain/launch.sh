@@ -111,7 +111,7 @@ fi
 if [[ -n ${VP-} ]]; then
     CONFIG_OVERRIDES+="-vp $VP "
 fi
-if [[ -z ${EP-} ]] && [[ $GPU_TYPE == "b300" || $GPU_TYPE == "b200" ]]; then
+if [[ -z ${EP-} ]] && { [[ $GPU_TYPE == "b300" || $GPU_TYPE == "b200" ]] || ((JOB_TOTAL_GPUS % 72 == 0)); }; then
     EP=8
 fi
 if [[ -n ${EP-} ]]; then
@@ -119,6 +119,9 @@ if [[ -n ${EP-} ]]; then
 fi
 if [[ -n ${ET-} ]]; then
     CONFIG_OVERRIDES+="-et $ET "
+fi
+if [[ -z ${MBS-} ]] && ((JOB_TOTAL_GPUS % 72 == 0)); then
+    MBS=5
 fi
 if [[ -n ${MBS-} ]]; then
     CONFIG_OVERRIDES+="-mb $MBS "

@@ -22,6 +22,8 @@
 # Setup
 general:
   workload: gpt_oss
+  display_name: gpt-oss
+  workload_aliases: [gpt_oss, gpt-oss]
   workload_type: pretrain
   framework: megatron_bridge
 
@@ -71,7 +73,7 @@ run:
       model_configs:
         - model_size: '120b'
           dtypes: ['bf16']
-          scales: [64, 128, 256, 512]
+          scales: [64, 72, 128, 144, 216, 256, 288, 360, 432, 504, 512, 576]
     gb200:
       model_configs:
         - model_size: '120b'

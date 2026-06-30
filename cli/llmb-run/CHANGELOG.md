@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-06-11
+
+### Added
+
+- NeMo-RL (GRPO) performance metrics in job history: `jobs list` and `jobs show` report `s/iter` and `Tokens/s/GPU` for RL workloads, parsed from the experiment's `metrics.json`.
+
+### Fixed
+
+- Remove WiT submission restrictions now that it's significantly faster.
+
+## [1.14.6] - 2026-06-06
+
+### Added
+
+- Nsight Systems mount mapping for NeMo `26.04.01` container images.
+
+## [1.14.5] - 2026-06-04
+
+### Changed
+
+- `llmb-run archive` default output filenames now include the recipe release version from `release.yaml`.
+
+### Fixed
+
+- Reject blank `llmb_repo` values during configuration loading so commands fail fast with a configuration error.
+
 ## [1.14.4] - 2026-05-15
 
 ### Changed

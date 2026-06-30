@@ -86,7 +86,7 @@ def prompt_install_location(ui: UIInterface, default: Optional[str] = None) -> O
     return location
 
 
-def prompt_install_method(ui: UIInterface, default: Optional[str] = None, express_mode: bool = False) -> str:
+def prompt_install_method(ui: UIInterface, default: Optional[str] = None, express_mode: bool = False) -> Optional[str]:
     """Prompt the user to select the installation method (local or slurm).
 
     Args:
@@ -95,7 +95,7 @@ def prompt_install_method(ui: UIInterface, default: Optional[str] = None, expres
         express_mode: Whether this is being called from express mode (shows default messages)
 
     Returns:
-        str: The selected installation method ('local' or 'slurm')
+        Optional[str]: The selected installation method ('local' or 'slurm'), or None if the user cancels.
     """
     ui.log("\nInstallation Method")
     ui.log("--------------------")
@@ -149,6 +149,9 @@ def prompt_install_method(ui: UIInterface, default: Optional[str] = None, expres
         selected_default = None
 
     selected = ui.prompt_select("Select installation method:", options, default=selected_default)
+
+    if selected is None:
+        return None
 
     if selected == "slurm":
         ui.log("\nNote: SLURM method will submit jobs for container downloads and other tasks.")

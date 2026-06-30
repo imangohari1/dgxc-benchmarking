@@ -86,3 +86,10 @@ CUDA_CUPTI_FILENAME_PATTERNS = {
 
 # Supported tools (explicit allow-list)
 SUPPORTED_TOOLS = {'nsys', 'cuda_cupti_lib'}
+
+# uv standalone binary download patterns for compute-node use.
+UV_BASE_URL = 'https://github.com/astral-sh/uv/releases/download'
+UV_GNU_TARGETS = {
+    'x86_64': 'x86_64-unknown-linux-gnu',
+    'aarch64': 'aarch64-unknown-linux-gnu',
+}

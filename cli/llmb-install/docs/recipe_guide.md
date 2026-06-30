@@ -154,28 +154,67 @@ repositories:
 
 Specifies offline assets to download during installation. This section is used to ensure models and tokenizers are available in air-gapped or offline environments.
 
-### HuggingFace Assets
+### HuggingFace Downloads
 
-The recommended way to specify HuggingFace assets is using the `huggingface` list. This allows you to specify both tokenizers and model configurations.
+The `huggingface` key supports two kinds of downloads, named for where the files land:
+
+- **`cache`** entries populate the shared HuggingFace cache at `$LLMB_INSTALL/.cache/huggingface` for offline `AutoTokenizer` / `AutoConfig` loading.
+- **`repos`** entries download HuggingFace repository contents into an LLMB-managed workload or shared dataset directory.
+
+```yaml
+downloads:
+  huggingface:
+    cache:
+      - repo_id: Qwen/Qwen3-30B-A3B
+        assets: [tokenizer, config]   # Optional: defaults to both if omitted
+    repos:
+      - repo_id: nvidia/DeepSeek-R1-0528-FP4
+        repo_type: model              # Required: 'model' or 'dataset'
+        name: DeepSeek-R1-FP4         # Optional: defaults to repo basename
+        when:
+          gpu: [gb200, b200]
+```
+
+For recipes that only need cache assets, the bare list shorthand remains supported and is equivalent to a `cache` list:
 
 ```yaml
 downloads:
   huggingface:
     - repo_id: Qwen/Qwen3-30B-A3B
-      assets: [tokenizer, config]   # Optional: defaults to both if omitted
+      assets: [tokenizer, config]
 ```
 
-#### Fields
+Repo entries are downloaded to:
+
+- `target: workload` -> `$LLMB_INSTALL/workloads/<workload_key>/<name>`
+- `target: shared` -> `$LLMB_INSTALL/datasets/<name>`
+
+#### Cache entry fields
+
+- **`repo_id`** (string, required): The HuggingFace repository ID. Cache entries are always `model` repos.
+- **`revision`** (string or null, optional): Branch, tag, or commit to download. Defaults to the HuggingFace default revision.
+- **`assets`** (list of enums, optional): Which assets to download. Allowed values: `tokenizer`, `config`. Defaults to **both**.
+
+#### Repo entry fields
 
 - **`repo_id`** (string, required): The HuggingFace repository ID.
-- **`assets`** (list of enums, optional): Which assets to download. Allowed values: `tokenizer`, `config`.
-  - If omitted, it defaults to **both** `[tokenizer, config]`.
+- **`repo_type`** (enum, required): HuggingFace repository type. Allowed values: `model`, `dataset`. Note that on the HuggingFace Hub, models and datasets with the same name are different repositories - a dataset entry with `repo_type: model` will fail at download time.
+- **`revision`** (string or null, optional): Branch, tag, or commit to download. Defaults to the HuggingFace default revision.
+- **`target`** (enum, optional): Destination root. `workload` (default) places the download under the workload directory; `shared` places it under `$LLMB_INSTALL/datasets`, shared and de-duplicated across workloads.
+- **`name`** (string, optional): Destination directory name. Defaults to the HuggingFace repo basename.
+- **`include`** (list of strings, optional): HuggingFace `allow_patterns` passed to `snapshot_download`.
+- **`exclude`** (list of strings, optional): HuggingFace `ignore_patterns` passed to `snapshot_download`.
+- **`when.gpu`** (list of GPU types, optional): Restricts the entry to matching install-time GPU types.
 
 #### Behavior and Rules
 
-- **No Weights**: This section does **NOT** download model weights (SafeTensors/Pickle). It only downloads metadata, tokenizers, and configuration files.
-- **Download vs. Verify**: Downloads run first, then a separate verification step checks that required assets load offline (`local_files_only=True`). This is an internal implementation split (two functions), not a separate lifecycle phase.
-- **Caching**: Assets are cached in `$LLMB_INSTALL/.cache/huggingface` and made available to workloads via the `HF_HOME` environment variable.
+- **Cache entries avoid weights**: cache downloads do **NOT** download model weights (SafeTensors/Pickle). They only download metadata, tokenizers, and configuration files.
+- **Repo entries download repo contents**: including weights unless filtered. Use `include` / `exclude` when only part of a repository is needed.
+- **Download vs. Verify**: Cache downloads run first, then a separate verification step checks that required assets load offline (`local_files_only=True`). Repo downloads are verified by a clean HuggingFace download exit.
+- **Caching**: HuggingFace always uses the installer-owned cache at `$LLMB_INSTALL/.cache/huggingface`, with `HF_HOME` and `HF_HUB_CACHE` set during downloads.
+- **Destination safety**: Repo destinations are constrained to LLMB-managed workload and shared dataset directories. Two different sources cannot resolve to the same destination; identical sources targeting the same shared destination are downloaded once.
+- **Setup remains for transforms**: Conversions, prompt dataset generation, checkpoint transforms, repository patching, and containerized setup should remain in `setup.tasks`.
+- **Migration scope**: Existing recipes with download scripts should be moved to `repos` entries in focused follow-up changes.
 
 ### Legacy: hf_tokenizers
 
@@ -187,7 +226,7 @@ downloads:
     - 'meta-llama/Meta-Llama-3-70B'
 ```
 
-> [!IMPORTANT]
+> [!important]
 > **Exclusivity Rule**: You cannot use both `hf_tokenizers` and `huggingface` within the same `metadata.yaml` file. Mixing them will result in a validation error.
 
 ### Migration Guidance
@@ -241,6 +280,53 @@ downloads:
   huggingface:
     - repo_id: meta-llama/Llama-3.1-405B
       assets: [config]
+```
+
+#### 4. Repo download into a workload directory (GPU-conditional)
+
+```yaml
+downloads:
+  huggingface:
+    repos:
+      - repo_id: deepseek-ai/DeepSeek-R1
+        repo_type: model
+        name: DeepSeek-R1-FP8
+        when:
+          gpu: [h100]
+      - repo_id: nvidia/DeepSeek-R1-0528-FP4
+        repo_type: model
+        name: DeepSeek-R1-FP4
+        when:
+          gpu: [gb200, b200]
+```
+
+#### 5. Dataset repo into the shared datasets directory
+
+```yaml
+downloads:
+  huggingface:
+    repos:
+      - repo_id: my-org/prompt-dataset
+        repo_type: dataset
+        revision: main
+        target: shared
+        include: ["*.jsonl", "*.txt"]
+        exclude: ["scratch/*"]
+```
+
+#### 6. Cache assets plus a dataset repo
+
+```yaml
+downloads:
+  huggingface:
+    cache:
+      - repo_id: my-org/model
+        assets: [config]
+    repos:
+      - repo_id: my-org/prompt-dataset
+        repo_type: dataset
+        target: shared
+        name: prompt-dataset
 ```
 
 **Note**: Accessing private or gated models requires the `HF_TOKEN` environment variable to be set during the installation phase.
@@ -397,6 +483,20 @@ run:
 - **`megatron_bridge`**: Megatron bridge launcher
 - **`configured_sbatch`**: SLURM sbatch submission with llmb-run-managed experiment directories
 - **`sbatch`**: Direct SLURM sbatch submission
+
+### `configured_sbatch` Requirements
+
+Use `configured_sbatch` when a workload needs a custom Slurm batch script and should use `llmb-run` managed experiment directories.
+
+For this launcher, `llmb-run` submits the workload's `launch_script` with `sbatch`, creates the experiment directory under `$LLMB_INSTALL/workloads/<workload_key>/experiments/`, and exports that path as `LLMB_EXPERIMENT_DIR`.
+
+Recipe requirements:
+
+- Write run artifacts such as logs, generated configs, metrics, and checkpoints under `LLMB_EXPERIMENT_DIR`.
+- Use `LLMB_INSTALL` to find installed workloads, checkpoints, datasets, and shared tools.
+- Use task variables such as `MODEL_SIZE`, `DTYPE`, `JOB_TOTAL_GPUS`, and `GPU_TYPE` for workload selection. Standard Slurm job variables are also available because the script runs as the `sbatch` payload.
+
+`llmb-run` writes `llmb-config_<JOBID>.yaml` into `LLMB_EXPERIMENT_DIR` and uses the same directory for job logs, archive collection, and supported post-processing.
 
 ### Launch Script Env Contract
 
@@ -802,7 +902,7 @@ The complete schema is defined in `.gitlab/ci/metadata_schema.yaml`. Key enums a
 ### Enums
 
 - **GPU Types**: `h100`, `b200`, `gb200`, `gb300`, `default` (for by_gpu only)
-- **Workload Types**: `pretrain`, `inference`, `finetune`, `microbenchmark`, `tools`
+- **Workload Types**: `pretrain`, `inference`, `finetune`, `microbenchmark`, `rl`
 - **Dtypes**: `fp8`, `bf16`, `nvfp4`, `mxfp4`
 - **Launcher Types**: `nemo`, `megatron_bridge`, `configured_sbatch`, `sbatch`
 - **Job Types**: `local`, `nemo2`, `srun`, `sbatch`

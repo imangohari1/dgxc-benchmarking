@@ -22,6 +22,8 @@
 # Setup
 general:
   workload: deepseek-v3-torchtitan
+  display_name: deepseek-v3-torchtitan
+  workload_aliases: [deepseek-v3-torchtitan]
   workload_type: pretrain
   framework: torchtitan
 

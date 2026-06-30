@@ -357,11 +357,24 @@ def _ctx_app_context(ctx: typer.Context) -> AppContext:
     raise RuntimeError("Missing llmb-run application context.")
 
 
+def _display_workloads(app_ctx: AppContext) -> dict:
+    """Workload metadata for display labels, loaded once per command.
+
+    Empty on failure so `jobs list`/`jobs show` keep working without a
+    readable llmb_repo (labels degrade to the pretrain columns).
+    """
+    try:
+        return get_workloads(app_ctx.cluster_config)
+    except Exception as e:
+        logger.debug(f"Workload metadata unavailable for display: {e}")
+        return {}
+
+
 def _jobs_list_impl(ctx: typer.Context) -> None:
     app_ctx = _ctx_app_context(ctx)
     _, refresh_error = refresh_non_terminal_jobs(app_ctx.cluster_config)
     rows = list_jobs(app_ctx.cluster_config)
-    typer.echo(format_jobs_table(rows))
+    typer.echo(format_jobs_table(rows, _display_workloads(app_ctx)))
     if refresh_error:
         # Print after the table so users notice it even when the table scrolls.
         logger.warning(f"sacct unavailable; status may be stale ({refresh_error}).")
@@ -394,7 +407,7 @@ def jobs_show(ctx: typer.Context, job_id: Annotated[int, typer.Argument(help='Sl
     app_ctx = _ctx_app_context(ctx)
     _, refresh_error = refresh_non_terminal_jobs(app_ctx.cluster_config)
     row = _get_job_or_exit(app_ctx, job_id)
-    typer.echo(format_job_details(row))
+    typer.echo(format_job_details(row, _display_workloads(app_ctx)))
     if refresh_error:
         logger.warning(f"sacct unavailable; status may be stale ({refresh_error}).")
 
@@ -832,7 +845,8 @@ def archive(
     output: Annotated[
         Optional[str],
         typer.Option(
-            '--output', help='Path to output .tar.zst file. Defaults to $LLMB_INSTALL/llmb-archive-<timestamp>.tar.zst.'
+            '--output',
+            help='Path to output .tar.zst file. Default filename under $LLMB_INSTALL: llmb-archive_<release_version>_<timestamp>.tar.zst.',
         ),
     ] = None,
 ):

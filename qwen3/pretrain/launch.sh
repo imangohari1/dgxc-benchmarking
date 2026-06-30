@@ -60,7 +60,7 @@ export GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
 export GPU_TYPE=${GPU_TYPE,,}
 export JOB_TOTAL_GPUS=${JOB_TOTAL_GPUS:?JOB_TOTAL_GPUS is a required variable.}
 
-FW_VERSION=26.04.00
+FW_VERSION=26.04.01
 
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/nvidia+nemo+$FW_VERSION.sqsh}
 if [ "$MODEL_SIZE" = "235b" ]; then
@@ -80,6 +80,8 @@ GPU_METRICS_ENABLED=${ENABLE_GPU_METRICS:-false}
 GPU_METRICS_ENABLED=${GPU_METRICS_ENABLED,,}
 ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
 
 # Handle additional SLURM parameters from environment variable
 ADDITIONAL_SLURM_PARAMS=${ADDITIONAL_SLURM_PARAMS:-""}
@@ -183,6 +185,8 @@ fi
 if [[ $ENABLE_VBOOST == true ]]; then
     CONFIG_OVERRIDES+=" --enable_vboost true "
 fi
+
+CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
 
 if [[ $GPU_TYPE == "gb200" ]] || [[ $GPU_TYPE == "gb300" ]]; then
     GPUS_PER_NODE=4

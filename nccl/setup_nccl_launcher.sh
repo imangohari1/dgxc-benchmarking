@@ -30,6 +30,7 @@ fi
 
 export WORKLOAD_TYPE=microbenchmark
 export MODEL_NAME=nccl
+export FW_VERSION=26.04.01
 
 # All three variables are set by the llmb-install script.
 LLMB_INSTALL=${LLMB_INSTALL:?Please set LLMB_INSTALL to the path of the installation directory for all workloads}
@@ -71,8 +72,6 @@ nvcomms-perf generate-job-script --run-type=container --system $GPU_TYPE \
     --systems-toml config/systems.toml \
     --user-toml config/nemofw.user.toml \
     --testset-toml config/testset.toml > "$LLMB_INSTALL/llmb_repo/nccl/launch.sh"
-
-sed -i -e "1d" "$LLMB_INSTALL/llmb_repo/nccl/launch.sh"
 
 # shellcheck disable=SC2016
 sed -i -e 's|NVCOMMS_PERF_TOOLS_WORKSPACE:-.|NVCOMMS_PERF_TOOLS_WORKSPACE:-$LLMB_INSTALL/workloads/microbenchmark_nccl/experiments/|g' "$LLMB_INSTALL/llmb_repo/nccl/launch.sh"
