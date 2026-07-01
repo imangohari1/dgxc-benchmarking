@@ -25,25 +25,27 @@ This recipe contains information and scripts to produce performance results for 
 
 ## B300
 
-| Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
-| --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| BF16      | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |  1  |  1  | 2048 | 128 |
-| BF16      | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |  1  |  1  | 4096 | 128 |
-| BF16      | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |  1  |  1  | 8192 | 128 |
+| Precision      | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
+| -------------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
+| NVFP4/FP8/BF16 | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |     |  2  | 2048 | 64  |
+| NVFP4/FP8/BF16 | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |     |  2  | 4096 | 64  |
+| NVFP4/FP8/BF16 | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |     |  2  | 8192 | 64  |
 
 ## B200
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| BF16/FP8  | 256  |  4096  |   61   |  1  | 16  |  1  |  8  | 16  | N/A |  1  | 4096 | 256 |
-| BF16/FP8  | 512  |  4096  |   61   |  1  | 16  |  1  |  8  | 32  | N/A |  1  | 8192 | 256 |
+| FP8       | 256  |  4096  |   61   |  1  |  8  |  1  | 32  | 32  |  2  |  1  | 4096 | 128 |
+| BF16      | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |     |  1  | 4096 | 128 |
+| FP8       | 512  |  4096  |   61   |  1  |  8  |  1  | 32  | 64  |  2  |  1  | 8192 | 128 |
+| BF16      | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |     |  1  | 8192 | 128 |
 
 ## H100
 
-| Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
-| --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| FP8       | 512  |  4096  |   61   |  2  |  8  |  1  | 64  | 32  |  4  |  1  | 4096 | 128 |
-| BF16/FP8  | 1024 |  4096  |   61   |  2  |  8  |  1  | 64  | 64  |  4  |  1  | 8192 | 128 |
+| Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS |  GBS  | GA  |
+| --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :---: | :-: |
+| FP8       | 1024 |  4096  |   61   |  2  |  8  |  1  | 64  | 64  |  2  |  1  | 16384 | 256 |
+| BF16      | 1024 |  4096  |   61   |  2  |  8  |  1  | 64  | 64  |  4  |  1  | 16384 | 256 |
 
 # Performance Measurement and Analysis
 
@@ -323,8 +325,6 @@ PyTorch Profiling is intended for rare, advanced debugging scenarios such as NCC
 
 > **Note:** This option is mutually exclusive with Nsight profiling (`ENABLE_PROFILE`). Both cannot be enabled at the same time.
 
-> **Note:** PyTorch profiling is **not supported on H100** (nemo:25.09.00). The launch script will abort with an error if `ENABLE_PYTORCH_PROFILE=true` is set for H100.
-
 **Example command:**
 
 ```shell
@@ -333,7 +333,6 @@ ENABLE_PYTORCH_PROFILE=true llmb-run submit -w pretrain_deepseek-v3 --dtype bf16
 
 The trace file location depends on the GPU type and the NeMo version used:
 
-- **GB300, GB200, B300** (nemo:26.04.00): `torch_profile/rank-N.json.gz`
-- **B200** (nemo:26.02.01): `pytorch_profile/`
+- **GB300, GB200, B300, B200, H100** (nemo:26.04.01): `torch_profile/rank-N.json.gz`
 
 In both cases `N` is the rank number. For details on the PyTorch Profiler and how to view resulting traces, see the [PyTorch Profiler documentation](https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html).

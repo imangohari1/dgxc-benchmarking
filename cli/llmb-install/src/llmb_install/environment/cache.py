@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -23,8 +23,6 @@
 """Cache directory management utilities for LLMB installer."""
 
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 from llmb_install.environment.detector import is_uv_installed
@@ -62,23 +60,6 @@ def setup_cache_directories(install_path: str, venv_type: str) -> None:
         elif _is_under_home_directory(uv_cache_dir):
             print(f"\nWARNING: UV_CACHE_DIR is under home directory: {uv_cache_dir}")
             print("This may cause space issues. Consider using a more performant storage.")
-
-
-def check_pip_cache_location() -> None:
-    """Check the pip cache directory location and warn if it's under /home."""
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "cache", "dir"], capture_output=True, text=True, check=True
-        )
-        pip_cache_dir = result.stdout.strip()
-
-        if _is_under_home_directory(pip_cache_dir):
-            print("\nWARNING: Your pip cache directory is located under home directory")
-            print(f"Current location: {pip_cache_dir}")
-            print("This may cause space issues when installing large packages.")
-            print("Consider setting PIP_CACHE_DIR environment variable to a location with more space.")
-    except subprocess.CalledProcessError:
-        print("Could not determine pip cache location.")
 
 
 def _is_under_home_directory(path: str) -> bool:

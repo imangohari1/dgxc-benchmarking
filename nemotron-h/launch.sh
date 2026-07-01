@@ -30,7 +30,7 @@ set -eu -o pipefail
 
 export WORKLOAD_TYPE=pretrain
 export MODEL_NAME=nemotron-h
-export FW_VERSION=26.02.01
+export FW_VERSION=26.04.01
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
@@ -61,6 +61,10 @@ GPU_METRICS_ENABLED=${ENABLE_GPU_METRICS:-false}
 GPU_METRICS_ENABLED=${GPU_METRICS_ENABLED,,}
 ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
+TP_COMM_OVERLAP=${TP_COMM_OVERLAP:-true}
+TP_COMM_OVERLAP=${TP_COMM_OVERLAP,,}
 TIME_LIMIT=${TIME_LIMIT:-"00:20:00"}
 MAX_STEPS=${MAX_STEPS:-50}
 
@@ -137,6 +141,14 @@ if { [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]] || [[ $GPU_TYPE ==
     export NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-4}
 fi
 
+if [[ $TP_COMM_OVERLAP == "false" ]]; then
+    CONFIG_OVERRIDES+=" comm_overlap.tp_comm_overlap=false comm_overlap.tp_comm_overlap_cfg=null "
+fi
+
+CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
+if [[ $ENABLE_PCT_BINDING == "true" ]]; then
+    export NCCL_IGNORE_CPU_AFFINITY=1
+fi
 # run command
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 
@@ -155,6 +167,7 @@ python3 scripts/performance/setup_experiment.py \
     --log_dir $NEMORUN_HOME \
     --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
+    --packager none \
     $SLURM_ARGS
 
 popd

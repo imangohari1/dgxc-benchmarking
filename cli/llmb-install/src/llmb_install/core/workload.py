@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from llmb_install.cluster.slurm import augment_env_for_job_type
+from llmb_install.environment.detector import get_clean_environment_for_subprocess, get_host_architecture
 from llmb_install.environment.venv_manager import get_venv_environment
 
 
@@ -122,6 +123,7 @@ def run_setup_tasks(
     slurm_info: Dict[str, Any],
     global_env_vars: Dict[str, str],
     gpu_type: str,
+    node_architecture: str,
 ):
     """Execute setup tasks defined for a workload in serial order.
 
@@ -134,12 +136,22 @@ def run_setup_tasks(
         slurm_info: Cluster SLURM config as gathered earlier.
         global_env_vars: Env vars collected from the user (e.g. HF_TOKEN).
         gpu_type: GPU type (e.g., 'h100', 'gb200').
+        node_architecture: Canonical compute-node architecture from cluster config
+            ('x86_64' or 'aarch64').  When this differs from the login-node arch,
+            sbatch tasks run with venv stripped so that login-arch binaries are not
+            propagated to compute nodes of a different architecture.
     """
     tasks = get_setup_tasks(workload_data)
     if not tasks:
         return
 
     workload_dir = workload_data["path"]
+
+    # Determine once whether login-node and compute-node architectures differ.
+    # When they do, sbatch tasks must not propagate the login-arch venv to the
+    # compute node (sbatch defaults to --export=ALL).
+    host_arch = get_host_architecture()
+    arch_mismatch = bool(host_arch and node_architecture and host_arch != node_architecture)
 
     for idx, task in enumerate(tasks, start=1):
         name = task.get("name", f"task_{idx}")
@@ -153,8 +165,18 @@ def run_setup_tasks(
         task_env_extra_raw = task.get("env", {}) or {}
         task_env_extra: Dict[str, str] = {k: str(v) for k, v in task_env_extra_raw.items()}
 
-        # Compose environment
-        if venv_path:
+        # Compose environment.
+        # For sbatch tasks on mismatched architectures: strip both the installer's
+        # own venv (present in os.environ) and any workload venv so that login-arch
+        # binaries are not forwarded to compute nodes via sbatch --export=ALL.
+        # For all other cases: activate the workload venv (if any) or inherit as-is.
+        if job_type == "sbatch" and arch_mismatch:
+            env = get_clean_environment_for_subprocess()
+            print(
+                f"  Note: login arch ({host_arch}) differs from compute arch ({node_architecture}). "
+                f"Running sbatch task '{name}' with venv stripped to avoid arch mismatch."
+            )
+        elif venv_path:
             env = get_venv_environment(venv_path, venv_type)
         else:
             env = os.environ.copy()
@@ -177,7 +199,9 @@ def run_setup_tasks(
         try:
             if job_type == "sbatch":
                 # Submit the sbatch job. Assume `cmd` contains the sbatch script path (and optional args).
-                full_cmd = ["sbatch"] + shlex.split(cmd)
+                # Force log output to the workload's install dir; %x expands to --job-name if the script sets one.
+                log_path = os.path.join(env["LLMB_WORKLOAD"], "%x-%j.out")
+                full_cmd = ["sbatch", f"--output={log_path}"] + shlex.split(cmd)
                 result = subprocess.run(full_cmd, check=True, capture_output=True, text=True, cwd=workload_dir, env=env)
 
                 # Attempt to extract job-id from output (handles both --parsable and default formats)

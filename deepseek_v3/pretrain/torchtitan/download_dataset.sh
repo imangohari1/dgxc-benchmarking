@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -46,8 +46,6 @@ fi
 
 # Use shared dataset location to avoid duplicate downloads across workloads
 DATASET_DIR="$LLMB_INSTALL/datasets/c4"
-HF_CACHE_DIR="$LLMB_INSTALL/.cache/huggingface"
-mkdir -p "$HF_CACHE_DIR"
 
 # Check if dataset already exists
 if [ -d "$DATASET_DIR" ] && [ "$(ls -A $DATASET_DIR 2> /dev/null)" ]; then
@@ -59,9 +57,10 @@ else
     # Pass token explicitly to avoid rate limiting issues with login()
     if [ -n "${HF_TOKEN:-}" ]; then
         echo "Using HuggingFace token for download..."
-        hf download allenai/c4 --include "en/*" --include "dataset_info.json" --include "*.py" --include "README.md" --repo-type dataset --cache-dir "$HF_CACHE_DIR" --local-dir "$DATASET_DIR" --token "$HF_TOKEN"
+
+        hf download allenai/c4 --include "en/*" --include "dataset_info.json" --include "*.py" --include "README.md" --repo-type dataset --local-dir "$DATASET_DIR" --token "$HF_TOKEN"
     else
-        hf download allenai/c4 --include "en/*" --include "dataset_info.json" --include "*.py" --include "README.md" --repo-type dataset --cache-dir "$HF_CACHE_DIR" --local-dir "$DATASET_DIR"
+        hf download allenai/c4 --include "en/*" --include "dataset_info.json" --include "*.py" --include "README.md" --repo-type dataset --local-dir "$DATASET_DIR"
     fi
 
     echo "Dataset download complete!"

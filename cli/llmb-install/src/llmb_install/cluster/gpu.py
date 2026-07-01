@@ -87,7 +87,7 @@ def _resolve_repositories_for_gpu(repos_field: Any, gpu_type: str) -> Dict[str, 
     for name, entry in selected.items():
         if not isinstance(entry, dict) or 'url' not in entry or 'commit' not in entry:
             raise ValueError(f"Invalid repository entry for '{name}' after GPU resolution")
-        out[name] = {'url': entry['url'], 'commit': entry['commit']}
+        out[name] = {'url': entry['url'], 'commit': entry['commit'], 'submodules': entry.get('submodules', False)}
     return out
 
 

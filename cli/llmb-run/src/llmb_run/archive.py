@@ -33,6 +33,7 @@ from dataclasses import dataclass
 import zstandard
 
 from llmb_run.config_manager import ClusterConfig
+from llmb_run.run_config import load_llmb_version
 
 _ARCHIVE_PREFIX = "llmb-archive"
 
@@ -62,9 +63,9 @@ def utc_timestamp(now_utc: datetime.datetime | None = None) -> str:
     return now_utc.strftime("%Y%m%dT%H%M%SZ")
 
 
-def default_archive_output(llmb_install: pathlib.Path, timestamp: str) -> pathlib.Path:
+def default_archive_output(llmb_install: pathlib.Path, timestamp: str, release_version: str) -> pathlib.Path:
     """Return default output path under LLMB_INSTALL."""
-    return llmb_install / f"{_ARCHIVE_PREFIX}-{timestamp}.tar.zst"
+    return llmb_install / f"{_ARCHIVE_PREFIX}_{release_version}_{timestamp}.tar.zst"
 
 
 def build_archive_file_list(llmb_install: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
@@ -148,7 +149,16 @@ def run_archive(cluster_config: ClusterConfig, output: str | None) -> ArchiveSta
 
     llmb_install = pathlib.Path(llmb_install_raw)
     timestamp = utc_timestamp()
-    output_path = pathlib.Path(output).expanduser() if output else default_archive_output(llmb_install, timestamp)
+    if output:
+        output_path = pathlib.Path(output).expanduser()
+    else:
+        release_version = load_llmb_version(cluster_config.llmb_repo)
+        if not release_version:
+            raise ValueError(
+                f"Unable to determine llmb_version from release.yaml under {cluster_config.llmb_repo}. "
+                "Ensure release.yaml exists and contains llmb_version."
+            )
+        output_path = default_archive_output(llmb_install, timestamp, release_version)
 
     if output_path.exists():
         raise ValueError(f"Archive output already exists: {output_path}")

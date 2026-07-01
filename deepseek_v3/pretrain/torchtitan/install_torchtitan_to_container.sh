@@ -163,7 +163,8 @@ if [[ "${DEEPEP_BRANCH}" == "main" ]]; then
     echo "Setting up NVSHMEM"
 
     # Install NVSHMEM (required for DeepEP device linking with -rdc=true)
-    python3 -m pip install nvidia-nvshmem-cu13
+    # Pinned to the version shipped in the nvidia/pytorch:25.12-py3 base image
+    python3 -m pip install nvidia-nvshmem-cu13==3.6.5
 
     # Download libcudacxx if needed
     if [[ ! -f "/usr/local/cuda/include/cuda/std/tuple" ]]; then

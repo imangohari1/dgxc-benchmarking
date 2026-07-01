@@ -164,6 +164,7 @@ After installation, the following structure is created:
 ```text
 $LLMB_INSTALL/
 ├── .cache/          # Download caches (pip, uv, tools installers)
+├── bin/             # Per-architecture uv/uvx binaries for compute-node setup
 ├── images/          # Container images (.sqsh files)
 ├── datasets/        # Dataset files
 ├── tools/           # Workload-specific tools (nsys, etc.)
@@ -197,6 +198,15 @@ The installer automatically detects and validates:
 - **aarch64**: ARM-based systems (Grace Blackwell, etc.)
 
 **Important**: Choosing the wrong architecture will cause "Exec format error" when running containers.
+
+The installer also creates `$LLMB_INSTALL/bin/<arch>/uv` and `uvx` so setup scripts can use a uv binary that matches the node they run on. The host architecture is always populated; if the selected compute-node architecture differs from the installer host, the compute architecture is downloaded from uv's GNU Linux release tarballs. Set `LLMB_UV_VERSION` before installation to choose a specific uv version; otherwise the installer snapshots the active `uv --version`.
+
+Compute-side scripts that need uv should resolve it at runtime:
+
+```bash
+export LLMB_BIN="${LLMB_BIN:-$LLMB_INSTALL/bin/$(uname -m)}"
+"$LLMB_BIN/uv" run ...
+```
 
 ### Installation Method
 
@@ -239,6 +249,7 @@ You are running within a SLURM job, but enroot is not available on this system.
 
 - **Option 1**: Try running the installer again, perhaps during off-peak hours.
 - **Option 2**: Obtain an interactive shell on a dedicated CPU node and run the installer there. This offloads the resource usage from the login node.
+- **Option 3**: On hosts with ample memory, speed up HuggingFace downloads by raising `LLMB_HF_MAX_WORKERS` / `HF_XET_FIXED_DOWNLOAD_CONCURRENCY` (see [HuggingFace Downloads Killed / Out of Memory](#huggingface-downloads-killed--out-of-memory)).
 
 ### Enroot Not Available for Local Installation
 
@@ -307,6 +318,21 @@ WARNING: UV_CACHE_DIR is under /home: /home/user/.cache/uv
 - Choose installation location with adequate space
 - Clean up unnecessary files in target directory
 - Consider using storage with higher quotas
+
+### HuggingFace Downloads Killed / Out of Memory
+
+**Issue**: Model or dataset downloads abort partway — either a Rust `memory allocation of N bytes failed` error, or the process is silently killed and drops back to the shell. This happens on hosts with a tight per-job or per-user memory limit (`ulimit -v`, or a cgroup `memory.max` such as a systemd login-slice), which `ulimit` alone may not reveal.
+
+**Explanation**: HuggingFace's Xet downloader scales memory with the number of concurrent download streams. To stay under tight caps, the installer pins conservative defaults: `HF_XET_FIXED_DOWNLOAD_CONCURRENCY=1` (per-file streams) and 4 concurrent file downloads (~2.5 GB peak). Peak memory roughly scales with `files × per-file streams`.
+
+**Solution**: The defaults work out of the box. On memory-rich hosts you can raise them for faster downloads (export before running the installer):
+
+| Variable                            | Default | Effect                                                     |
+| ----------------------------------- | ------- | ---------------------------------------------------------- |
+| `LLMB_HF_MAX_WORKERS`               | `4`     | Number of files downloaded concurrently.                   |
+| `HF_XET_FIXED_DOWNLOAD_CONCURRENCY` | `1`     | Per-file Xet download streams (read directly by `hf-xet`). |
+
+Requires `hf-xet >= 1.3.0` (installed automatically). If a host's memory limit is below ~2.5 GB, the download may still be killed — run the installer on a node with more memory.
 
 ## Command Line Reference
 

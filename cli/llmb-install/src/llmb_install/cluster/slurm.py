@@ -23,6 +23,7 @@
 """SLURM cluster configuration utilities for LLMB installer."""
 
 import os
+import re
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -266,6 +267,113 @@ def normalize_partition_list(partition_input: str) -> list[str]:
     if not partition_input:
         return []
     return list(dict.fromkeys(partition.strip() for partition in partition_input.split(',') if partition.strip()))
+
+
+def _sample_node_names(node_names: list[str], sample_size: int = 5) -> list[str]:
+    """Return up to sample_size unique node names, preserving sinfo order."""
+    if sample_size <= 0:
+        return []
+    sampled = []
+    seen = set()
+    for node_name in node_names:
+        if node_name in seen:
+            continue
+        sampled.append(node_name)
+        seen.add(node_name)
+        if len(sampled) >= sample_size:
+            break
+    return sampled
+
+
+def _parse_node_architectures(scontrol_output: str) -> dict[str, str]:
+    """Parse node architectures from ``scontrol show node -o`` output."""
+    node_architectures = {}
+    for line in scontrol_output.splitlines():
+        node_match = re.search(r'(?:^|\s)NodeName=(\S+)', line)
+        arch_match = re.search(r'(?:^|\s)Arch=(\S+)', line)
+        if node_match and arch_match:
+            node_architectures[node_match.group(1)] = arch_match.group(1)
+    return node_architectures
+
+
+def detect_partition_architecture(partition: str, sample_size: int = 5) -> Dict[str, Any]:
+    """Detect the CPU architecture for a GPU partition using a bounded Slurm sample.
+
+    Returns:
+        Dict with detection details:
+        {
+            'architecture': Optional[str],  # x86_64 or aarch64 when confidently detected
+            'reason': str,                  # detected, no_nodes, no_arch, mixed, unsupported, or error
+            'nodes': list[str],             # sampled nodes queried with scontrol
+            'architectures': dict[str,str], # parsed node -> arch values
+            'error': Optional[str],         # command error detail when available
+        }
+    """
+    empty_result = {
+        "architecture": None,
+        "reason": "error",
+        "nodes": [],
+        "architectures": {},
+        "error": None,
+    }
+
+    partitions = normalize_partition_list(partition)
+    if not partitions:
+        return {**empty_result, "reason": "no_nodes"}
+
+    try:
+        sinfo_result = subprocess.run(
+            ["sinfo", "-N", "--noheader", "-p", ",".join(partitions), "-o", "%N"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
+        return {**empty_result, "error": str(e)}
+
+    nodes = _sample_node_names([line.strip() for line in sinfo_result.stdout.splitlines() if line.strip()], sample_size)
+    if not nodes:
+        return {**empty_result, "reason": "no_nodes"}
+
+    try:
+        scontrol_result = subprocess.run(
+            ["scontrol", "-o", "show", "node", ",".join(nodes)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
+        return {**empty_result, "nodes": nodes, "error": str(e)}
+
+    architectures = _parse_node_architectures(scontrol_result.stdout)
+    if not architectures:
+        return {**empty_result, "reason": "no_arch", "nodes": nodes}
+
+    unique_architectures = set(architectures.values())
+    if len(unique_architectures) > 1:
+        return {
+            **empty_result,
+            "reason": "mixed",
+            "nodes": nodes,
+            "architectures": architectures,
+        }
+
+    architecture = next(iter(unique_architectures))
+    if architecture not in {"x86_64", "aarch64"}:
+        return {
+            **empty_result,
+            "reason": "unsupported",
+            "nodes": nodes,
+            "architectures": architectures,
+        }
+
+    return {
+        "architecture": architecture,
+        "reason": "detected",
+        "nodes": nodes,
+        "architectures": architectures,
+        "error": None,
+    }
 
 
 def detect_partition_gres(partitions: list[str]) -> Dict[str, Dict[str, Any]]:

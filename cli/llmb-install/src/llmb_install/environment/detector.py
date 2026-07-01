@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -24,6 +24,7 @@
 
 import importlib.util
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -163,6 +164,42 @@ def get_clean_environment_for_subprocess() -> Dict[str, str]:
         env.pop(var, None)
 
     return env
+
+
+def normalize_architecture(arch: str) -> str:
+    """Normalize common architecture spellings to canonical LLMB names.
+
+    Args:
+        arch: Raw architecture string (e.g. from platform.machine() or cluster config).
+
+    Returns:
+        Canonical architecture string: 'x86_64' or 'aarch64'.
+
+    Raises:
+        ValueError: If the architecture is not recognised.
+    """
+    normalized = arch.lower()
+    if normalized in ('x86_64', 'amd64'):
+        return 'x86_64'
+    if normalized in ('aarch64', 'arm64'):
+        return 'aarch64'
+    raise ValueError(f"Unsupported architecture: {arch!r}")
+
+
+def get_host_architecture() -> Optional[str]:
+    """Return the canonical architecture name of the current (login) host.
+
+    Returns:
+        'x86_64' or 'aarch64', or None if the host architecture cannot be
+        determined or is not a recognised LLMB architecture.  Callers that use
+        this to detect a login-vs-compute arch mismatch should treat None as
+        "no mismatch" so that unknown or novel architectures never accidentally
+        strip environments on matched-arch clusters.
+    """
+    try:
+        return normalize_architecture(platform.machine())
+    except (ValueError, Exception):
+        return None
 
 
 def get_system_python_path(clean_env: Optional[Dict[str, str]] = None) -> str:

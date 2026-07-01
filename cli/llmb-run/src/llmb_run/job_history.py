@@ -39,17 +39,17 @@ from rich.table import Table
 
 from llmb_run.config_manager import ClusterConfig
 from llmb_run.pretrain_log_parser import (
-    PretrainLogParseResult,
     PretrainLogParseStatus,
     parse_latest_pretrain_job_log,
     parser_name_for_framework,
 )
+from llmb_run.rl_metrics_parser import parse_rl_metrics
 from llmb_run.slurm_utils import SlurmAccountingRecord, SlurmJob, get_slurm_job_statuses, parse_slurm_job_id
 from llmb_run.tasks import WorkloadTask
 
 logger = logging.getLogger('llmb_run.job_history')
 
-DB_SCHEMA_VERSION = 1
+DB_SCHEMA_VERSION = 2
 HISTORY_DIR_NAME = ".llmb"
 HISTORY_DB_NAME = "jobs.sqlite3"
 # sacct accounting can lag behind sbatch by several seconds; don't mark a job
@@ -414,12 +414,17 @@ _SLURM_STATE_STYLES = {
 }
 
 
-def format_jobs_table(rows: list[sqlite3.Row]) -> str:
+def format_jobs_table(rows: list[sqlite3.Row], workloads: dict[str, Any]) -> str:
     if not rows:
         return "No jobs found. Run `llmb-run jobs rebuild` to scan existing llmb-config files."
 
     # Color when stdout is a terminal; plain text when piped or under tests.
     use_color = sys.stdout.isatty()
+
+    # Show the Tokens/s/GPU column only when an RL workload is present. This
+    # keeps the pretrain-only view unchanged while still labeling unparsed or
+    # failed RL rows with the right throughput metric.
+    show_tokens_col = any(_is_rl_workload(workloads, row["workload_key"]) for row in rows)
 
     table = Table(box=box.SIMPLE_HEAD, header_style="bold", show_edge=False, pad_edge=False)
     table.add_column("Workload", overflow="fold")
@@ -432,6 +437,8 @@ def format_jobs_table(rows: list[sqlite3.Row]) -> str:
     table.add_column("Elapsed")
     table.add_column("s/iter", justify="right")
     table.add_column("TFLOPS/GPU", justify="right")
+    if show_tokens_col:
+        table.add_column("Tokens/s/GPU", justify="right")
 
     for row in rows:
         slurm_state = row["slurm_state"] or ""
@@ -439,7 +446,7 @@ def format_jobs_table(rows: list[sqlite3.Row]) -> str:
         display_state = _display_slurm_state(slurm_state)
         styled_state = f"[{style}]{display_state}[/{style}]" if style and display_state else display_state
 
-        table.add_row(
+        cells = [
             _display_workload(row),
             row["dtype"] or "",
             str(row["scale"]) if row["scale"] is not None else "",
@@ -450,7 +457,10 @@ def format_jobs_table(rows: list[sqlite3.Row]) -> str:
             row["elapsed"] or "",
             _format_perf_metric(row, "train_step_time_seconds"),
             _format_perf_metric(row, "tflops_per_gpu"),
-        )
+        ]
+        if show_tokens_col:
+            cells.append(_format_float(row["tokens_per_sec_per_gpu"]))
+        table.add_row(*cells)
 
     console = Console(
         width=160,
@@ -462,7 +472,18 @@ def format_jobs_table(rows: list[sqlite3.Row]) -> str:
     return capture.get().rstrip()
 
 
-def format_job_details(row: sqlite3.Row) -> str:
+def format_job_details(row: sqlite3.Row, workloads: dict[str, Any]) -> str:
+    # Show the throughput metric that's meaningful for this job's type:
+    #   - pretrain jobs: TFLOPS/GPU
+    #   - RL jobs:       Tokens/s/GPU
+    # The workload's framework decides, resolved from the already-loaded
+    # workload metadata (no per-row disk reads at display time).
+    throughput_details: list[tuple[str, str]]
+    if _is_rl_workload(workloads, row["workload_key"]):
+        throughput_details = [("Tokens/s/GPU", _format_float(row["tokens_per_sec_per_gpu"]))]
+    else:
+        throughput_details = [("TFLOPS/GPU", _format_float(row["tflops_per_gpu"]))]
+
     details = [
         ("Job ID", str(row["job_id"])),
         ("Launcher", row["launcher_type"]),
@@ -476,7 +497,7 @@ def format_job_details(row: sqlite3.Row) -> str:
         ("Elapsed", row["elapsed"]),
         ("Perf Parse", _display_perf_parse_status(row["perf_parse_status"])),
         ("s/iter", _format_float(row["train_step_time_seconds"])),
-        ("TFLOPS/GPU", _format_float(row["tflops_per_gpu"])),
+        *throughput_details,
         ("Submit Time", _format_timestamp(row["submit_time"])),
         ("Node List", row["node_list"]),
         ("Exit Code", row["exit_code"]),
@@ -536,9 +557,16 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             model_overrides_json TEXT,
             train_step_time_seconds REAL,
             tflops_per_gpu REAL,
+            tokens_per_sec_per_gpu REAL,
             perf_parse_status TEXT
         )
         """)
+    # Schema migrations — idempotent, ordered by version.
+    # v1 → v2: add tokens_per_sec_per_gpu column (RL workload throughput metric).
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "tokens_per_sec_per_gpu" not in existing_columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN tokens_per_sec_per_gpu REAL")
+
     conn.execute(
         """
         INSERT INTO metadata (key, value)
@@ -604,7 +632,7 @@ def _update_terminal_job_results(
     """Update result columns for terminal jobs, skipping previous attempts by default."""
     with _open_history_db(config) as conn:
         filters = [
-            "launcher_type IN ('nemo', 'megatron_bridge')",
+            "launcher_type IN ('nemo', 'megatron_bridge', 'configured_sbatch')",
             "log_dir IS NOT NULL",
             "llmb_config_path IS NOT NULL",
         ]
@@ -636,7 +664,6 @@ def _update_terminal_job_results(
             if result is None:
                 continue
 
-            metrics = result.metrics
             now = _now_iso()
             conn.execute(
                 """
@@ -645,13 +672,15 @@ def _update_terminal_job_results(
                     perf_parse_status = ?,
                     train_step_time_seconds = ?,
                     tflops_per_gpu = ?,
+                    tokens_per_sec_per_gpu = ?,
                     updated_at = ?
                 WHERE job_id = ?
                 """,
                 (
-                    result.status.value,
-                    metrics.time_mean_seconds if metrics else None,
-                    metrics.tflops_per_gpu_mean if metrics else None,
+                    result.status,
+                    result.train_step_time_seconds,
+                    result.tflops_per_gpu,
+                    result.tokens_per_sec_per_gpu,
                     now,
                     row["job_id"],
                 ),
@@ -660,16 +689,71 @@ def _update_terminal_job_results(
         conn.commit()
 
 
-def _parse_job_performance(row: sqlite3.Row) -> PretrainLogParseResult | None:
+@dataclass(frozen=True)
+class _PerfResult:
+    status: str  # status.value string, e.g. "success", "incomplete"
+    train_step_time_seconds: float | None = None
+    tflops_per_gpu: float | None = None
+    tokens_per_sec_per_gpu: float | None = None
+
+
+def _parse_job_performance(row: sqlite3.Row) -> _PerfResult | None:
+    if _is_rl_job(row):
+        return _parse_rl_job_performance(row)
+    return _parse_pretrain_job_performance(row)
+
+
+def _is_rl_framework(framework: str | None) -> bool:
+    return framework is not None and str(framework).strip().lower() == "nemo-rl"
+
+
+def _is_rl_job(row: sqlite3.Row) -> bool:
+    return _is_rl_framework(_framework_from_llmb_config(row["llmb_config_path"]))
+
+
+def _is_rl_workload(workloads: dict[str, Any], workload_key: str | None) -> bool:
+    """RL check against the loaded workload metadata — a dict lookup, no disk I/O."""
+    if not workload_key:
+        return False
+    workload_info = workloads.get(workload_key)
+    if not isinstance(workload_info, dict):
+        return False
+    metadata = workload_info.get('metadata')
+    if not isinstance(metadata, dict):
+        return False
+    return _is_rl_framework((metadata.get('general') or {}).get('framework'))
+
+
+def _parse_pretrain_job_performance(row: sqlite3.Row) -> _PerfResult | None:
     framework = _framework_from_llmb_config(row["llmb_config_path"])
     if parser_name_for_framework(framework) is None:
         return None
 
     try:
-        return parse_latest_pretrain_job_log(row["log_dir"], int(row["job_id"]), framework)
+        result = parse_latest_pretrain_job_log(row["log_dir"], int(row["job_id"]), framework)
     except OSError as e:
-        logger.debug(f"Unable to parse perf log for job {row['job_id']}: {e}")
+        logger.debug(f"Unable to parse pretrain perf log for job {row['job_id']}: {e}")
         return None
+
+    metrics = result.metrics
+    return _PerfResult(
+        status=result.status.value,
+        train_step_time_seconds=metrics.time_mean_seconds if metrics else None,
+        tflops_per_gpu=metrics.tflops_per_gpu_mean if metrics else None,
+    )
+
+
+def _parse_rl_job_performance(row: sqlite3.Row) -> _PerfResult | None:
+    if not row["log_dir"]:
+        return None
+
+    result = parse_rl_metrics(row["log_dir"])
+    metrics = result.metrics
+    return _PerfResult(
+        status=result.status.value,
+        train_step_time_seconds=metrics.step_time_mean_seconds if metrics else None,
+        tokens_per_sec_per_gpu=metrics.tokens_per_sec_per_gpu_mean if metrics else None,
+    )
 
 
 def _framework_from_llmb_config(config_path: str | pathlib.Path | None) -> str | None:

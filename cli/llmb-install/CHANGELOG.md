@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project uses [PEP 440](https://www.python.org/dev/peps/pep-0440/) versioning with semantic versioning semantics:
 **MAJOR.MINOR.PATCH** for feature parity with [SemVer](https://semver.org/).
 
+## [1.13.1] - 2026-06-22
+
+### Fixed
+
+- HuggingFace (Xet) downloads getting OOM-killed on hosts with tight per-job/per-user memory limits (`ulimit -v` or cgroup `memory.max`). The installer now bounds peak download memory by pinning `HF_XET_FIXED_DOWNLOAD_CONCURRENCY=1` and limiting concurrent file downloads to 4; both are overridable (`HF_XET_FIXED_DOWNLOAD_CONCURRENCY`, `LLMB_HF_MAX_WORKERS`) on memory-rich hosts that want faster downloads.
+
+## [1.13.0] - 2026-06-10
+
+### Changed
+
+- Replaced the unreleased `downloads.huggingface[].snapshot` schema with an explicit split: `downloads.huggingface.cache` for shared-cache assets and `downloads.huggingface.repos` for repo-contents downloads into LLMB-managed directories. The released bare-list form of `downloads.huggingface` remains supported as shorthand for `cache` entries. Repo entries require `repo_type`, use `target: workload|shared`, and support entry-level `when.gpu` filtering.
+
+## [1.12.0] - 2026-06-09
+
+### Added
+
+- Auto-detect GPU node CPU architecture from SLURM node metadata when available, falling back to the existing manual architecture prompt when detection is unavailable, mixed, or unsupported.
+
+### Fixed
+
+- Setup task subprocesses now reliably inherit `PIP_CACHE_DIR` and `UV_CACHE_DIR` on every install path (incremental, headless, and edit-resume previously missed
+  them), so `uv`/`pip` no longer fall back to caching under the user's home directory.
+- Pressing Ctrl+C at the install method prompt now exits the installer instead of continuing to the next prompt.
+- Setup tasks now run from the installed copy of the repo (`$LLMB_INSTALL/llmb_repo/<workload>`) instead of the original git clone.
+- `sbatch` setup tasks now receive an explicit `--output` flag directing logs to `$LLMB_INSTALL/workloads/<workload>/`, overriding the SLURM default of writing to the submission directory.
+- `sbatch` setup tasks no longer propagate the login-node virtual environment to compute nodes when the login and compute CPU architectures differ.
+
+## [1.11.0] - 2026-06-08
+
+### Added
+
+- Support HuggingFace `downloads.huggingface[].snapshot` entries to download model or dataset repositories into LLMB-managed workload or dataset directories.
+
+## [1.10.0] - 2026-06-03
+
+### Added
+
+- Install per-architecture `uv`/`uvx` binaries under `$LLMB_INSTALL/bin/<arch>` for compute-node setup on mixed-architecture clusters.
+
+## [1.9.2] - 2026-06-02
+
+### Added
+
+- Boolean field `submodules` in `repositories`; when set to `true`, runs `git submodule update --init --recursive` after cloning.
+
 ## [1.9.1] - 2026-05-04
 
 ### Fixed

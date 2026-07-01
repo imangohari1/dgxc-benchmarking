@@ -23,6 +23,7 @@ NCCL_DEBUG_SUBSYS="Graph,Init,Env"
 -e = "16G"
 -d = "float"
 -R = 0
+-c = 1
 
 
 [[test]]
@@ -30,13 +31,18 @@ name = "all_reduce"
 binary = "all_reduce_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
-
+[test.sweep_envs]
+NCCL_NVLS_ENABLE = ["0", "1"]
+[test.sweep_args]
+-G = ["None", "2", "4"]
 
 [[test]]
 name = "all_gather"
 binary = "all_gather_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
+[test.sweep_args]
+-G = ["None", "2", "4"]
 
 
 [[test]]
@@ -44,6 +50,8 @@ name = "reduce_scatter"
 binary = "reduce_scatter_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
+[test.sweep_args]
+-G = ["None", "2", "4"]
 
 
 [[test]]
@@ -55,6 +63,7 @@ args_merge_strategy = "override"
 NCCL_NCHANNELS_PER_NET_PEER = ["1", "2"]
 [test.sweep_args]
 -d = "uint8"
+-G = ["None", "2", "4"]
 
 [[test]]
 name = "sendrecv"
@@ -65,3 +74,4 @@ args_merge_strategy = "override"
 NCCL_NCHANNELS_PER_NET_PEER = ["2", "4"]
 [test.sweep_args]
 -d = "uint8"
+-G = ["None", "2", "4"]

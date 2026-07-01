@@ -27,12 +27,12 @@ general:
 
 container:
   images: 
-    - 'nvcr.io#nvidia/nemo:26.04.00'
+    - 'nvcr.io#nvidia/nemo:26.04.01'
 
 repositories:
   comms-perf:
     url: "https://github.com/NVIDIA/Nvidia-Comms-Perf-Suite.git"
-    commit: "07b1b55f606af57e3f276bf182e04f626c923b4c"
+    commit: "3773f3a5495e8cfb83bb34709b9a21627ecc3117"
 
 setup:
   venv_req: true

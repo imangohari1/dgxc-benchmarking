@@ -60,6 +60,7 @@ from llmb_install.core.workload import (
     filter_tools_from_workload_list,
     run_setup_tasks,
 )
+from llmb_install.downloads.compute_uv import setup_compute_uv_binaries
 from llmb_install.downloads.huggingface import download_huggingface_files_for_workloads
 from llmb_install.downloads.image import fetch_container_images, get_required_images
 from llmb_install.downloads.tools import fetch_and_install_tools, get_required_tools
@@ -174,6 +175,9 @@ class Installer:
 
         Returns:
             str: Path to the repository to use (either original or copied)
+
+        Side effects:
+            Updates self.workloads to reflect the returned path (non-dev mode only).
         """
         if dev_mode:
             print(f"Development mode: Using repository at {self.root_dir}")
@@ -218,6 +222,7 @@ class Installer:
         else:
             print(f"Using existing repository copy at {repo_copy_path}")
 
+        self.workloads = build_workload_dict(repo_copy_path)
         return repo_copy_path
 
     def _complete_installation(
@@ -506,9 +511,6 @@ class Installer:
 
             # Note: self.root_dir already set from resume state in run() method
             # No need to set it again here
-
-            # Setup cache directories (needed for UV and pip)
-            setup_cache_directories(config.install_path, config.venv_type)
 
             # Re-run dependency grouping on remaining workloads for optimal installation plan
             filtered_workloads = filter_workloads_by_gpu_type(self.workloads, config.gpu_type)
@@ -1213,10 +1215,6 @@ class Installer:
             # First time configuration or install path changed - perform repository setup
             self.root_dir = self._handle_repository_setup(install_path, dev_mode)
 
-        # Setup cache directories now that we know the install path
-        if not record_mode:
-            setup_cache_directories(install_path, venv_type)
-
         # Import prompt functions for SLURM and GPU configuration
         from llmb_install.ui.prompts.gpu import prompt_gpu_type as new_prompt_gpu_type
         from llmb_install.ui.prompts.gpu import (
@@ -1244,7 +1242,11 @@ class Installer:
         gpu_type = new_prompt_gpu_type(ui, self.workloads, defaults.get('gpu_type'), express_mode=False)
 
         node_architecture = new_prompt_node_architecture(
-            ui, gpu_type, defaults.get('node_architecture'), express_mode=False
+            ui,
+            gpu_type,
+            defaults.get('node_architecture'),
+            express_mode=False,
+            gpu_partition=slurm_config['slurm']['gpu_partition'],
         )
         print()
 
@@ -1262,6 +1264,9 @@ class Installer:
         filtered_workloads = resolve_gpu_overrides(filtered_workloads, gpu_type)
 
         install_method = prompt_install_method(ui, defaults.get('install_method'), express_mode=False)
+        if install_method is None:
+            print("\nInstallation cancelled.")
+            raise SystemExit(EXIT_CANCELLED)
         print()
 
         # In dev mode, skip exemplar/custom question and go straight to workload selection
@@ -1364,6 +1369,9 @@ class Installer:
 
         # 3. Install method - allow changes if system supports both
         install_method = prompt_install_method(ui, resume_config.install_method, express_mode=False)
+        if install_method is None:
+            print("\nInstallation cancelled.")
+            raise SystemExit(EXIT_CANCELLED)
         print()
 
         # 4. Workload selection - restricted to original selection minus completed
@@ -1851,10 +1859,9 @@ class Installer:
         dev_mode = getattr(args, 'dev_mode', False)
         self.root_dir = self._handle_repository_setup(install_path, dev_mode)
 
-        # Setup cache directories. Fresh express installs always use uv for
-        # recipe environments, regardless of stale saved venv_type defaults.
+        # Fresh express installs always use uv for recipe environments,
+        # regardless of stale saved venv_type defaults.
         venv_type = prompt_environment_type(ui, system_config.venv_type)
-        setup_cache_directories(install_path, venv_type)
 
         # Get workloads from CLI or prompt and determine selection mode
         workload_selection_mode = 'custom'  # Default mode
@@ -2192,6 +2199,11 @@ class Installer:
             The name 'install_config' distinguishes this from 'existing_cluster_config'
             and other config types used throughout the installer.
         """
+        # Configure uv/pip cache directories before any venv/dependency work so that
+        # all install subprocesses inherit them via os.environ. Single source of truth
+        # for every install mode (interactive/express/headless/resume/incremental).
+        setup_cache_directories(install_config.install_path, install_config.venv_type)
+
         # Clear any existing install state only if this is NOT a resume operation
         if not is_resume:
             try:
@@ -2224,8 +2236,10 @@ class Installer:
         os.makedirs(os.path.join(install_config.install_path, "workloads"), exist_ok=True)
         os.makedirs(os.path.join(install_config.install_path, "venvs"), exist_ok=True)
         os.makedirs(os.path.join(install_config.install_path, "tools"), exist_ok=True)
+        os.makedirs(os.path.join(install_config.install_path, "bin"), exist_ok=True)
 
         create_llmb_run_symlink(install_config.install_path)
+        setup_compute_uv_binaries(install_config.install_path, install_config.node_architecture)
 
         print("\nDownloading required container images.")
         print("--------------------------------")
@@ -2252,7 +2266,11 @@ class Installer:
         # Download HuggingFace assets
         hf_token = install_config.environment_vars.get('HF_TOKEN')
         download_huggingface_files_for_workloads(
-            filtered_workloads, install_config.selected_workloads, install_config.install_path, hf_token
+            filtered_workloads,
+            install_config.selected_workloads,
+            install_config.install_path,
+            hf_token,
+            gpu_type=install_config.gpu_type,
         )
 
         # Download and install required tools
@@ -2320,6 +2338,7 @@ class Installer:
                             slurm_info,
                             install_config.environment_vars,
                             install_config.gpu_type,
+                            install_config.node_architecture,
                         )
 
                     self._save_installation_progress(
@@ -2386,6 +2405,7 @@ class Installer:
                                 slurm_info,
                                 install_config.environment_vars,
                                 install_config.gpu_type,
+                                install_config.node_architecture,
                             )
 
                         print("✓ Workloads installed successfully (reused venv)")
@@ -2453,6 +2473,7 @@ class Installer:
                                 slurm_info,
                                 install_config.environment_vars,
                                 install_config.gpu_type,
+                                install_config.node_architecture,
                             )
 
                     # Track completion for dependency-based workloads (after all workloads in this group complete)

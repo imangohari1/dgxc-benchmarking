@@ -679,6 +679,21 @@ def clone_git_repos(git_deps: Dict[str, Any], target_dir: str, install_path: str
             logger.error(f"Failed to checkout commit {commit} in {clone_path}: {e.stderr}")
             raise
 
+        # Update submodules if specified
+        if repo_info.get('submodules', False):
+            logger.debug(f"Checking out submodules for {name}")
+            try:
+                subprocess.run(
+                    ['git', 'submodule', 'update', '--init', '--recursive'],
+                    cwd=clone_path,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to checkout submodules for {name}: {e.stderr}")
+                raise
+
         print(f"  ✓ {name}")
 
 

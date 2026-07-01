@@ -18,6 +18,13 @@ The tables below list the GPU counts in `metadata.yaml` for this recipe (256 and
 | FP8 (MX)  | 256  |  4096  |  1  |  4  |  1  | 64  | 64  |  4  |  1  | 2048 |
 | FP8 (MX)  | 512  |  4096  |  1  |  4  |  1  | 64  | 128 |  4  |  1  | 4096 |
 
+## B300
+
+| Precision | GPUs | SeqLen | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  |
+| --------- | :--: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: |
+| FP8 (MX)  | 256  |  4096  |  1  | 16  |  1  | 16  |  1  | N/A |  2  | 4096 |
+| FP8 (MX)  | 512  |  4096  |  1  | 16  |  1  | 16  |  2  | N/A |  2  | 8192 |
+
 ## B200
 
 | Precision | GPUs | SeqLen | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  |
@@ -184,7 +191,7 @@ JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> [DTYPE=<precision>] [ADDITIONAL_SLURM_PA
 **Required:**
 
 - `JOB_TOTAL_GPUS`: Number of GPUs to use.
-- `GPU_TYPE`: `gb300`, `gb200`, or `b200` (listed in `metadata.yaml`). Megatron-Bridge also defines an `h100` Kimi-K2 preset; use `GPU_TYPE=h100` with eight GPUs per node if you run that recipe directly.
+- `GPU_TYPE`: `gb300`, `gb200`, `b300`, or `b200` (listed in `metadata.yaml`). Megatron-Bridge also defines an `h100` Kimi-K2 preset; use `GPU_TYPE=h100` with eight GPUs per node if you run that recipe directly.
 
 **Optional:**
 
@@ -222,6 +229,18 @@ Kimi-K2 1T, FP8 MX, 512 GB200 GPUs:
 
 ```shell
 JOB_TOTAL_GPUS=512 GPU_TYPE=gb200 DTYPE=fp8 ./launch.sh
+```
+
+Kimi-K2 1T, FP8 MX, 256 B300 GPUs:
+
+```shell
+JOB_TOTAL_GPUS=256 GPU_TYPE=b300 DTYPE=fp8 ./launch.sh
+```
+
+Kimi-K2 1T, FP8 MX, 512 B300 GPUs:
+
+```shell
+JOB_TOTAL_GPUS=512 GPU_TYPE=b300 DTYPE=fp8 ./launch.sh
 ```
 
 Kimi-K2 1T, FP8 MX, 256 B200 GPUs:
