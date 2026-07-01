@@ -60,7 +60,7 @@ run:
       model_configs:
         - model_size: '56b'
           dtypes: 'fp8'
-          scales: [8, 16, 32, 64, 128, 256, 512]
+          scales: [32, 64, 128, 160, 188, 320, 384, 256, 412, 448, 512]
 
     gb200:
       model_configs:

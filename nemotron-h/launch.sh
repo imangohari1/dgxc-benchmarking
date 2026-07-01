@@ -149,6 +149,10 @@ CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
 if [[ $ENABLE_PCT_BINDING == "true" ]]; then
     export NCCL_IGNORE_CPU_AFFINITY=1
 fi
+
+# Added by Felix Abecassis (NVIDIA) on 2026-06-10
+#CONFIG_OVERRIDES+=" comm_overlap.tp_comm_overlap=false comm_overlap.tp_comm_overlap_cfg=null "
+
 # run command
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 
